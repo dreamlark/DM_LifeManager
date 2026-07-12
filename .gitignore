@@ -1,0 +1,51 @@
+# ===== 依赖 =====
+node_modules/
+.pnp/
+.pnp.js
+
+# ===== 构建产物 =====
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# ===== 环境变量 & 密钥 =====
+.env
+.env.*
+*.local
+# 保留示例文件
+!.env.example
+
+# ===== 数据库（含真实财务数据，严禁入库） =====
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+packages/engine/data/
+
+# ===== 运行 / 预览 / 冒烟测试数据 =====
+.preview-data*
+.smoke-*
+data/
+
+# ===== 临时与调试产物 =====
+.workbuddy/
+*.log
+
+# ===== 验证截图（非源码资源） =====
+*.png
+*.jpg
+*.jpeg
+# 保留 Tauri 应用图标
+!**/src-tauri/icons/*.png
+
+# ===== 桌面壳构建产物 =====
+src-tauri/target/
+**/src-tauri/target/
+*.rs.bk
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+

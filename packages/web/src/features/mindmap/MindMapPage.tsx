@@ -17,6 +17,7 @@ import MindElixir, { type MindElixirData, type MindElixirInstance } from 'mind-e
 import { zh_CN } from 'mind-elixir/i18n';
 import 'mind-elixir/style.css';
 import { useUI } from '../../store/uiStore';
+import { useSettings } from '../../store/settingsStore';
 import {
   loadStore,
   createMap,
@@ -49,7 +50,7 @@ function formatTime(iso: string): string {
 }
 
 export function MindMapPage() {
-  const theme = useUI((s) => s.theme);
+  const theme = useSettings((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const mindRef = useRef<MindElixirInstance | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

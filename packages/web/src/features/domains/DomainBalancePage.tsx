@@ -31,6 +31,9 @@ function fmtMinutes(min: number): string {
   return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分`;
 }
 
+const navBtn =
+  'rounded-md border border-bg-border bg-bg-raised px-3 py-1 text-sm text-gray-300 transition-colors hover:border-accent/50 hover:text-accent';
+
 export function DomainBalancePage() {
   const [week, setWeek] = useState<string>(() => mondayOf(new Date()));
 
@@ -49,48 +52,42 @@ export function DomainBalancePage() {
   );
 
   return (
-    <div className="h-full overflow-auto p-6 text-slate-200">
+    <div className="h-full overflow-auto p-6 text-gray-200">
       <div className="mx-auto max-w-4xl">
         <header className="mb-6 flex items-end justify-between">
           <div>
-            <h1 className="text-xl font-bold text-slate-100">领域平衡轮</h1>
-            <p className="mt-1 text-sm text-slate-400">
+            <h1 className="text-xl font-bold text-gray-100">领域平衡轮</h1>
+            <p className="mt-1 text-sm text-gray-500">
               以本周各领域真实专注投入时长衡量生活重心分布
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setWeek((w) => shiftWeek(w, -7))}
-              className="rounded-md border border-slate-700 bg-slate-800 px-3 py-1 text-sm text-slate-300 transition-colors hover:border-slate-500"
-            >
+            <button onClick={() => setWeek((w) => shiftWeek(w, -7))} className={navBtn}>
               上周
             </button>
-            <span className="text-sm tabular-nums text-slate-400">{week} 起</span>
-            <button
-              onClick={() => setWeek((w) => shiftWeek(w, 7))}
-              className="rounded-md border border-slate-700 bg-slate-800 px-3 py-1 text-sm text-slate-300 transition-colors hover:border-slate-500"
-            >
+            <span className="text-sm tabular-nums text-gray-400">{week} 起</span>
+            <button onClick={() => setWeek((w) => shiftWeek(w, 7))} className={navBtn}>
               下周
             </button>
           </div>
         </header>
 
-        {isLoading && <p className="text-sm text-slate-500">加载中…</p>}
+        {isLoading && <p className="text-sm text-gray-500">加载中…</p>}
 
         {wheel && (
           <>
-            <section className="mb-8 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-              <div className="mb-3 flex items-center justify-between text-sm text-slate-400">
+            <section className="mb-8 rounded-xl border border-bg-border bg-bg-panel p-5">
+              <div className="mb-3 flex items-center justify-between text-sm text-gray-400">
                 <span>本周专注总投入</span>
-                <span className="font-semibold text-slate-200">{fmtMinutes(totalMinutes)}</span>
+                <span className="font-semibold text-gray-100">{fmtMinutes(totalMinutes)}</span>
               </div>
               <div className="space-y-3">
                 {wheel.wheel.map((w) => (
                   <div key={w.key} className="flex items-center gap-3">
-                    <span className="w-16 shrink-0 truncate text-right text-xs text-slate-400" title={w.name}>
+                    <span className="w-16 shrink-0 truncate text-right text-xs text-gray-400" title={w.name}>
                       {w.name}
                     </span>
-                    <div className="relative h-6 flex-1 overflow-hidden rounded-md bg-slate-800">
+                    <div className="relative h-6 flex-1 overflow-hidden rounded-md bg-bg-raised">
                       <div
                         className="h-full rounded-md transition-all duration-500"
                         style={{
@@ -100,14 +97,14 @@ export function DomainBalancePage() {
                         }}
                       />
                     </div>
-                    <span className="w-28 shrink-0 text-right text-xs tabular-nums text-slate-300">
+                    <span className="w-28 shrink-0 text-right text-xs tabular-nums text-gray-300">
                       {w.minutes > 0 ? fmtMinutes(w.minutes) : '—'}
                     </span>
                   </div>
                 ))}
               </div>
               {totalMinutes === 0 && (
-                <p className="mt-3 text-center text-xs text-slate-500">
+                <p className="mt-3 text-center text-xs text-gray-500">
                   本周还没有专注记录，去「心流」页记一段专注时段吧。
                 </p>
               )}
@@ -115,7 +112,7 @@ export function DomainBalancePage() {
 
             {wheel.topStresses.length > 0 && (
               <section className="mb-8">
-                <h2 className="mb-2 text-sm font-semibold text-slate-300">压力代理（开放任务最多的领域）</h2>
+                <h2 className="mb-2 text-sm font-semibold text-gray-300">压力代理（开放任务最多的领域）</h2>
                 <div className="flex flex-wrap gap-2">
                   {wheel.topStresses.map((key) => (
                     <span
@@ -132,10 +129,10 @@ export function DomainBalancePage() {
         )}
 
         <section>
-          <h2 className="mb-3 text-sm font-semibold text-slate-300">领域聚合总览</h2>
-          <div className="overflow-hidden rounded-xl border border-slate-800">
+          <h2 className="mb-3 text-sm font-semibold text-gray-300">领域聚合总览</h2>
+          <div className="overflow-hidden rounded-xl border border-bg-border bg-bg-panel">
             <table className="w-full text-left text-sm">
-              <thead className="bg-slate-900/80 text-slate-400">
+              <thead className="bg-bg-raised text-gray-400">
                 <tr>
                   <th className="px-4 py-2 font-medium">领域</th>
                   <th className="px-4 py-2 text-right font-medium">任务</th>
@@ -147,7 +144,7 @@ export function DomainBalancePage() {
               </thead>
               <tbody>
                 {summary.map((d) => (
-                  <tr key={d.key} className="border-t border-slate-800/70">
+                  <tr key={d.key} className="border-t border-bg-border">
                     <td className="px-4 py-2">
                       <span className="inline-flex items-center gap-2">
                         <span
@@ -162,13 +159,13 @@ export function DomainBalancePage() {
                         )}
                       </span>
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums">{d.taskTotal}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{d.taskActive}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{d.taskDone}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-gray-200">{d.taskTotal}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-gray-200">{d.taskActive}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-gray-200">{d.taskDone}</td>
                     <td className="px-4 py-2 text-right tabular-nums">
                       {d.taskTotal > 0 ? `${Math.round(d.doneRate * 100)}%` : '—'}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-slate-400">
+                    <td className="px-4 py-2 text-right tabular-nums text-gray-400">
                       {d.focusMinutes > 0 ? fmtMinutes(d.focusMinutes) : '—'}
                     </td>
                   </tr>

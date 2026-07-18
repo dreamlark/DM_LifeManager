@@ -99,6 +99,24 @@ export default defineConfig({
     // shared 是 TS 源码，不入预构建，交给 esbuild 实时转译
     exclude: ['@dm-life/shared'],
   },
+  preview: {
+    host: '127.0.0.1',
+    port: 4173,
+    strictPort: true,
+    // 预览服务同样代理到 engine（截图走 preview）
+    proxy: {
+      '/trpc': ({
+        target: process.env.VITE_ENGINE_URL || `http://127.0.0.1:${DEFAULT_PORT}`,
+        changeOrigin: true,
+        router: () => process.env.VITE_ENGINE_URL || resolveEngineUrl(),
+      } as ProxyOptions & { router?: () => string }),
+      '/events': ({
+        target: process.env.VITE_ENGINE_URL || `http://127.0.0.1:${DEFAULT_PORT}`,
+        changeOrigin: true,
+        router: () => process.env.VITE_ENGINE_URL || resolveEngineUrl(),
+      } as ProxyOptions & { router?: () => string }),
+    },
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

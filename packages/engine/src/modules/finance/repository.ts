@@ -1,12 +1,14 @@
 import { db } from '../../db/client';
-import { debts, incomes, transactions, assets } from '../../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { debts, incomes, transactions, assets, budgets, financeTransfers } from '../../db/schema';
+import { eq, desc, or } from 'drizzle-orm';
 import type {
   DebtView,
   IncomeView,
   TransactionView,
   AssetView,
   FinanceSummary,
+  BudgetView,
+  TransferView,
 } from '@dm-life/shared';
 import { getDebtSummary, getRepaymentSchedule, type DebtCalcInput, type ScheduleRow, type DebtSummary } from './schedule';
 
@@ -67,6 +69,7 @@ function debtRowToView(r: DebtRow): DebtView {
     note: r.note,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    remainingPrincipal: getDebtSummary(debtRowToCalcInput(r)).remainingPrincipal,
   };
 }
 function incomeRowToView(r: IncomeRow): IncomeView {
@@ -220,7 +223,7 @@ export function updateDebtFields(
     repricing: string | null;
     prepayments: string | null;
     parentDebtId: string | null;
-    note: string | null;
+    note?: string;
   }>,
   now: string,
 ): void {
@@ -389,6 +392,93 @@ export function updateAssetValue(
 }
 export function deleteAssetById(id: string): void {
   db.delete(assets).where(eq(assets.id, id)).run();
+}
+
+/* ---------- 预算（整体/分类月度限额） ---------- */
+type BudgetRow = typeof budgets.$inferSelect;
+
+/** 当月（YYYY-MM）支出流水金额，按 scope/category 过滤 */
+function monthExpenseFor(monthStr: string, category: string | null): number {
+  const txnRows = db.select().from(transactions).all() as TxnRow[];
+  const monthExpenses = txnRows.filter(
+    (t) => t.kind === 'expense' && (t.occurredAt || '').slice(0, 7) === monthStr,
+  );
+  const matched = category ? monthExpenses.filter((t) => t.category === category) : monthExpenses;
+  return matched.reduce((s, t) => s + t.amount, 0);
+}
+
+function budgetRowToView(r: BudgetRow): BudgetView {
+  const now = new Date();
+  const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const spent = monthExpenseFor(monthStr, r.scope === 'category' ? r.category : null);
+  const remaining = Math.round((r.monthlyLimit - spent + Number.EPSILON) * 100) / 100;
+  const progress =
+    r.monthlyLimit > 0
+      ? Math.max(0, Math.min(1.5, Math.round((spent / r.monthlyLimit + Number.EPSILON) * 100) / 100))
+      : 0;
+  return {
+    id: r.id,
+    name: r.name,
+    scope: r.scope,
+    category: r.category,
+    monthlyLimit: r.monthlyLimit,
+    spent: Math.round((spent + Number.EPSILON) * 100) / 100,
+    remaining,
+    progress,
+    note: r.note,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  };
+}
+
+export function listBudgets(): BudgetView[] {
+  const rows = db.select().from(budgets).orderBy(desc(budgets.createdAt)).all() as BudgetRow[];
+  return rows.map(budgetRowToView);
+}
+
+export function getBudget(id: string): BudgetRow | undefined {
+  return db.select().from(budgets).where(eq(budgets.id, id)).get() as BudgetRow | undefined;
+}
+
+export function insertBudget(p: {
+  id: string;
+  name: string;
+  scope: 'overall' | 'category';
+  category: string | null;
+  monthlyLimit: number;
+  note: string;
+  now: string;
+}): void {
+  db.insert(budgets)
+    .values({
+      id: p.id,
+      name: p.name,
+      scope: p.scope,
+      category: p.category,
+      monthlyLimit: p.monthlyLimit,
+      note: p.note,
+      createdAt: p.now,
+      updatedAt: p.now,
+    })
+    .run();
+}
+
+export function updateBudgetFields(
+  id: string,
+  fields: Partial<{
+    name: string;
+    scope: 'overall' | 'category';
+    category: string | null;
+    monthlyLimit: number;
+    note: string;
+  }>,
+  now: string,
+): void {
+  db.update(budgets).set({ ...fields, updatedAt: now }).where(eq(budgets.id, id)).run();
+}
+
+export function deleteBudgetById(id: string): void {
+  db.delete(budgets).where(eq(budgets.id, id)).run();
 }
 
 /* ---------- 还款计划（引擎计算） ---------- */
@@ -588,8 +678,8 @@ export function autoGenerateMonthly(now = new Date()): { incomes: number; debts:
   const m = now.getMonth();
   const thisMonthStr = `${y}-${String(m + 1).padStart(2, '0')}`;
   const lastDay = new Date(y, m + 1, 0).getDate();
-  let incomes = 0;
-  let debts = 0;
+  let incomeCount = 0;
+  let debtCount = 0;
   let skipped = 0;
 
   // 已存在的本月流水（按 来源/债务 + 月份 去重）
@@ -623,7 +713,7 @@ export function autoGenerateMonthly(now = new Date()): { incomes: number; debts:
       incomeSourceId: inc.id,
       now: now.toISOString(),
     });
-    incomes += 1;
+    incomeCount += 1;
   }
 
   // 活跃债务：按扣款日生成还款流水
@@ -651,10 +741,10 @@ export function autoGenerateMonthly(now = new Date()): { incomes: number; debts:
       debtId: d.id,
       now: now.toISOString(),
     });
-    debts += 1;
+    debtCount += 1;
   }
 
-  return { incomes, debts, skipped };
+  return { incomes: incomeCount, debts: debtCount, skipped };
 }
 
 function txnKey(t: TxnRow): string {
@@ -740,6 +830,319 @@ export function summary(): FinanceSummary {
   };
 }
 
+/* ---------- 全局账目核对（只读，不写库） ---------- */
+export interface ReconcileDiscrepancy {
+  /** 差异归属范围，如 debt:招商银行 / global:paymentFlow / transaction:<id> */
+  scope: string;
+  message: string;
+  /** 差异金额（已还本金 − 还款流水 等口径，正数表示登记多于流水） */
+  diff: number;
+}
+export interface ReconcileResult {
+  balanced: boolean;
+  /** 净资产 = Σ 资产 − Σ 债务剩余本金 */
+  netWorth: number;
+  assetsTotal: number;
+  /** Σ 债务剩余本金（未偿余额） */
+  debtsTotal: number;
+  /** Σ 流水 where kind==='income' */
+  totalIncome: number;
+  /** Σ 流水 where kind==='expense' */
+  totalExpense: number;
+  /** Σ 债务已还本金 */
+  totalDebtPaid: number;
+  /** Σ 还款流水（kind==='debt_payment'）金额 */
+  paymentFlowTotal: number;
+  discrepancies: ReconcileDiscrepancy[];
+}
+
+const RECONCILE_EPS = 0.01;
+
+/**
+ * 全局账目核对：把「债务登记表（引擎推算的剩余本金/已还本金）」与「还款流水（debt_payment）」
+ * 双向勾稽。防御式：缺失数据不产生异常，仅产出空 discrepancies。
+ *  - 逐笔债务：登记已还本金（principal − remaining） vs 该债务还款流水合计
+ *  - 全局：Σ 已还本金 vs Σ 还款流水金额
+ *  - 完整性：还款流水引用了不存在的债务 → 孤立流水
+ * balanced = discrepancies.length === 0
+ */
+export function reconcile(): ReconcileResult {
+  const debtRows = (db.select().from(debts).all() as DebtRow[]).filter((d) => (d.termMonths ?? 0) > 0);
+  const txnRows = db.select().from(transactions).all() as TxnRow[];
+  const assetRows = db.select().from(assets).all() as AssetRow[];
+
+  const debtIds = new Set((db.select().from(debts).all() as DebtRow[]).map((d) => d.id));
+
+  // 每笔债务的「登记已还本金」与「未偿余额」
+  let debtsTotal = 0;
+  let totalDebtPaid = 0;
+  const paidByDebt = new Map<string, number>();
+  for (const r of debtRows) {
+    const sum = getDebtSummary(debtRowToCalcInput(r));
+    const remaining = sum.remainingPrincipal;
+    const paid = Math.max(0, r.principal - remaining);
+    debtsTotal += remaining;
+    totalDebtPaid += paid;
+    paidByDebt.set(r.id, paid);
+  }
+
+  const assetsTotal = assetRows.reduce((s, a) => s + a.value, 0);
+  const totalIncome = txnRows.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0);
+  const totalExpense = txnRows.filter((t) => t.kind === 'expense').reduce((s, t) => s + t.amount, 0);
+
+  const payTxns = txnRows.filter((t) => t.kind === 'debt_payment');
+  const paymentFlowTotal = payTxns.reduce((s, t) => s + t.amount, 0);
+
+  const netWorth = assetsTotal - debtsTotal;
+
+  const discrepancies: ReconcileDiscrepancy[] = [];
+
+  // 逐笔：登记已还本金 vs 该债务还款流水合计
+  const flowByDebt = new Map<string, number>();
+  for (const t of payTxns) {
+    if (!t.debtId) continue;
+    flowByDebt.set(t.debtId, (flowByDebt.get(t.debtId) ?? 0) + t.amount);
+  }
+  for (const r of debtRows) {
+    const paid = paidByDebt.get(r.id) ?? 0;
+    const flow = flowByDebt.get(r.id) ?? 0;
+    const diff = Math.round((paid - flow + Number.EPSILON) * 100) / 100;
+    if (Math.abs(diff) > RECONCILE_EPS) {
+      discrepancies.push({
+        scope: `debt:${r.creditor}`,
+        message: `债务「${r.creditor}」登记已还本金 ${round2(paid)}，还款流水合计 ${round2(flow)}（差额含利息/不一致）`,
+        diff,
+      });
+    }
+  }
+
+  // 全局：Σ 已还本金 vs Σ 还款流水
+  const globalDiff = Math.round((totalDebtPaid - paymentFlowTotal + Number.EPSILON) * 100) / 100;
+  if (Math.abs(globalDiff) > RECONCILE_EPS) {
+    discrepancies.push({
+      scope: 'global:paymentFlow',
+      message: `全局还款流水 ${round2(paymentFlowTotal)} 与已还本金合计 ${round2(totalDebtPaid)} 不一致`,
+      diff: globalDiff,
+    });
+  }
+
+  // 完整性：还款流水引用了不存在的债务（孤立流水）
+  for (const t of payTxns) {
+    if (t.debtId && !debtIds.has(t.debtId)) {
+      discrepancies.push({
+        scope: `transaction:${t.id}`,
+        message: `还款流水 ${t.id} 引用了不存在的债务 ${t.debtId}`,
+        diff: Math.round((t.amount + Number.EPSILON) * 100) / 100,
+      });
+    }
+  }
+
+  return {
+    balanced: discrepancies.length === 0,
+    netWorth: round2(netWorth),
+    assetsTotal: round2(assetsTotal),
+    debtsTotal: round2(debtsTotal),
+    totalIncome: round2(totalIncome),
+    totalExpense: round2(totalExpense),
+    totalDebtPaid: round2(totalDebtPaid),
+    paymentFlowTotal: round2(paymentFlowTotal),
+    discrepancies,
+  };
+}
+
+/* ---------- 报表导出（只读，返回字符串内容） ---------- */
+export interface ExportReportResult {
+  format: 'csv' | 'json';
+  filename: string;
+  content: string;
+}
+
+/**
+ * 导出财务报表为 CSV 或 JSON 字符串（调用方负责下载）。
+ *  - json：{ generatedAt, period, summary, debts, incomes, assets, transactions }
+ *  - csv：汇总表头 + transactions 明细（date,type,category,amount,note），含 CSV 引号转义
+ * month 形如 '2026-07'，仅过滤 transactions 明细；汇总仍为全局口径，period 标注区间。
+ */
+export function exportReport(input: { format: 'csv' | 'json'; month?: string }): ExportReportResult {
+  const { format, month } = input;
+  const debtRows = db.select().from(debts).all() as DebtRow[];
+  const incomeRows = db.select().from(incomes).all() as IncomeRow[];
+  const assetRows = db.select().from(assets).all() as AssetRow[];
+  let txnRows = db.select().from(transactions).all() as TxnRow[];
+
+  const assetsTotal = assetRows.reduce((s, a) => s + a.value, 0);
+  const debtsTotal = debtRows.reduce((s, r) => s + getDebtSummary(debtRowToCalcInput(r)).remainingPrincipal, 0);
+  const netWorth = assetsTotal - debtsTotal;
+  const totalIncome = txnRows.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0);
+  const totalExpense = txnRows.filter((t) => t.kind === 'expense').reduce((s, t) => s + t.amount, 0);
+
+  const period = month ?? 'all';
+  if (month) {
+    txnRows = txnRows.filter((t) => (t.occurredAt || '').slice(0, 7) === month);
+  }
+
+  const now = new Date();
+  const fileMonth = month ?? now.toISOString().slice(0, 7);
+  const filename = `finance-report-${fileMonth}.${format}`;
+
+  if (format === 'json') {
+    const content = JSON.stringify(
+      {
+        generatedAt: now.toISOString(),
+        period,
+        summary: {
+          assetsTotal: round2(assetsTotal),
+          debtsTotal: round2(debtsTotal),
+          netWorth: round2(netWorth),
+          totalIncome: round2(totalIncome),
+          totalExpense: round2(totalExpense),
+        },
+        debts: debtRows.map(debtRowToView),
+        incomes: incomeRows.map(incomeRowToView),
+        assets: assetRows.map(assetRowToView),
+        transactions: txnRows.map(txnRowToView),
+      },
+      null,
+      2,
+    );
+    return { format, filename, content };
+  }
+
+  // CSV：汇总表头 + 明细
+  const lines: string[] = [];
+  lines.push(`资产合计,${round2(assetsTotal)}`);
+  lines.push(`负债合计,${round2(debtsTotal)}`);
+  lines.push(`净资产,${round2(netWorth)}`);
+  lines.push(`总收入,${round2(totalIncome)}`);
+  lines.push(`总支出,${round2(totalExpense)}`);
+  lines.push(`统计周期,${period}`);
+  lines.push('');
+  lines.push('date,type,category,amount,note');
+  for (const t of txnRows) {
+    const date = (t.occurredAt || '').slice(0, 10);
+    lines.push(
+      `${date},${t.kind},${csvCell(t.category)},${t.amount},${csvCell(t.note)}`,
+    );
+  }
+  return { format, filename, content: lines.join('\n') };
+}
+
+function csvCell(s: string): string {
+  const v = s ?? '';
+  if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
+}
+
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/* ============ 金额互转（预留契约 P3） ============ */
+type TransferRow = typeof financeTransfers.$inferSelect;
+
+function transferRowToView(r: TransferRow): TransferView {
+  return {
+    id: r.id,
+    fromAccountId: r.fromAccountId,
+    toAccountId: r.toAccountId,
+    amountMinor: r.amountMinor,
+    currency: r.currency,
+    occurredAt: r.occurredAt,
+    note: r.note,
+    idempotencyKey: r.idempotencyKey ?? null,
+    reversed: !!r.reversed,
+    reversedAt: r.reversedAt ?? null,
+    createdAt: r.createdAt,
+  };
+}
+
+/**
+ * 幂等插入：若同一 idempotencyKey 已存在，直接返回首条记录，避免网络重试造成重复转账。
+ * 必须在 writeTx 事务内调用（与 appendEvent 共享同一原子边界）。
+ */
+export function insertTransfer(p: {
+  id: string;
+  fromAccountId: string;
+  toAccountId: string;
+  amountMinor: number;
+  currency: string;
+  occurredAt: string;
+  note: string;
+  idempotencyKey?: string | null;
+  now: string;
+}): TransferView {
+  if (p.idempotencyKey) {
+    const existing = db
+      .select()
+      .from(financeTransfers)
+      .where(eq(financeTransfers.idempotencyKey, p.idempotencyKey))
+      .get() as TransferRow | undefined;
+    if (existing) return transferRowToView(existing);
+  }
+  db.insert(financeTransfers)
+    .values({
+      id: p.id,
+      fromAccountId: p.fromAccountId,
+      toAccountId: p.toAccountId,
+      amountMinor: p.amountMinor,
+      currency: p.currency,
+      occurredAt: p.occurredAt,
+      note: p.note,
+      idempotencyKey: p.idempotencyKey ?? null,
+      reversed: 0,
+      reversedAt: null,
+      createdAt: p.now,
+    })
+    .run();
+  return transferRowToView(
+    db.select().from(financeTransfers).where(eq(financeTransfers.id, p.id)).get() as TransferRow,
+  );
+}
+
+export function listTransfers(opts: {
+  limit: number;
+  offset: number;
+  accountId?: string;
+}): TransferView[] {
+  let rows: TransferRow[];
+  if (opts.accountId) {
+    rows = db
+      .select()
+      .from(financeTransfers)
+      .where(
+        or(
+          eq(financeTransfers.fromAccountId, opts.accountId),
+          eq(financeTransfers.toAccountId, opts.accountId),
+        ),
+      )
+      .orderBy(desc(financeTransfers.occurredAt))
+      .limit(opts.limit)
+      .offset(opts.offset)
+      .all() as TransferRow[];
+  } else {
+    rows = db
+      .select()
+      .from(financeTransfers)
+      .orderBy(desc(financeTransfers.occurredAt))
+      .limit(opts.limit)
+      .offset(opts.offset)
+      .all() as TransferRow[];
+  }
+  return rows.map(transferRowToView);
+}
+
+export function getTransfer(id: string): TransferView | undefined {
+  const r = db
+    .select()
+    .from(financeTransfers)
+    .where(eq(financeTransfers.id, id))
+    .get() as TransferRow | undefined;
+  return r ? transferRowToView(r) : undefined;
+}
+
+/** 撤销标记（预留：当前仅置 reversed，不自动回滚手动余额） */
+export function reverseTransfer(id: string, reversedAt: string): void {
+  db.update(financeTransfers).set({ reversed: 1, reversedAt }).where(eq(financeTransfers.id, id)).run();
 }

@@ -49,3 +49,13 @@ src-tauri/target/
 .DS_Store
 Thumbs.db
 
+# ===== 本地调试 / 复现 / e2e 临时数据（严禁入库，含真实财务库） =====
+.data-repro/
+.e2e-pg/
+.e2e-run/
+.collab-data/
+.collab-data */
+nul
+*.timestamp-*.mjs
+vite.config.ts.*.mjs
+

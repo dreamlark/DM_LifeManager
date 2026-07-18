@@ -1,0 +1,79 @@
+# 家庭 NAS 一键部署：engine + server + 前端静态 + Caddy 反代 + watchtower 自动升级
+#
+# 用法（在 NAS 的 Docker 主机上，于仓库根目录）：
+#   docker compose up -d --build          # 首次 / 改动后重建
+#   docker compose ps                     # 查看状态
+#   bash scripts/nas/upgrade.sh          # 增量升级（拉源码→重建→滚动重启，./data 不动）
+#
+# 数据卷：./data/engine 与 ./data/server 各自持久化。
+# 升级只重建镜像、不动 ./data，做到「升级不影响使用与数据」。
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: ./packages/engine/Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=14570
+      - HOST=0.0.0.0
+      - DM_LIFE_DATA_DIR=/data
+    volumes:
+      - ./data/engine:/data
+    expose:
+      - "14570"
+
+  server:
+    build:
+      context: .
+      dockerfile: ./packages/server/Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4100
+      - PGLITE_DIR=/data
+      - CORS_ORIGIN=*
+      # 可选：改用真实 Postgres
+      # - DATABASE_URL=postgres://user:pass@postgres:5432/dm_life
+    volumes:
+      - ./data/server:/data
+    expose:
+      - "4100"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ./packages/web-collab/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - engine
+      - server
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # 替换为你的 Tailscale / 域名；Caddy 自动申请并续期 TLS。
+      - DOMAIN=dm-life.example.ts.net
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 自动升级（仅当镜像来自可拉取的镜像仓库时生效；本地构建栈需配合镜像推送）
+    command: --interval 3600 --cleanup
+
+volumes:
+  caddy_data:
+  caddy_config:

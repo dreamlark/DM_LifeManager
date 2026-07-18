@@ -5,7 +5,7 @@ import type { AppEvent, EventEnvelope } from '@dm-life/shared';
 
 /** 从事件载荷推断聚合根 id（事件表里 aggregate_id 用于索引回放） */
 function inferAggregateId(payload: AppEvent['payload']): string {
-  const p = payload as Record<string, unknown>;
+  const p = payload as unknown as Record<string, unknown>;
   return String(
     p.taskId ??
       p.projectId ??
@@ -15,6 +15,7 @@ function inferAggregateId(payload: AppEvent['payload']): string {
       p.incomeId ??
       p.transactionId ??
       p.assetId ??
+      p.budgetId ??
       p.reminderId ??
       'unknown',
   );

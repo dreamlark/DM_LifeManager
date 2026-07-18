@@ -7,7 +7,9 @@
     "packages/shared",
     "packages/engine",
     "packages/web",
-    "apps/desktop"
+    "apps/desktop",
+    "packages/server",
+    "packages/web-collab"
   ],
   "scripts": {
     "dev:engine": "npm run dev -w packages/engine",

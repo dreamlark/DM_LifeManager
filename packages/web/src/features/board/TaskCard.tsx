@@ -4,7 +4,7 @@ import { GripVertical, Check, Star, Clock, Trash2, Brain } from 'lucide-react';
 import { trpc } from '../../lib/trpc';
 import { useUI } from '../../store/uiStore';
 import { cn } from '../../lib/cn';
-import { toLocalInput, buildScheduleTimes } from '@dm-life/shared';
+import { toLocalInput, buildScheduleTimes, DOMAIN_KEYS } from '@dm-life/shared';
 import type { TaskView } from '@dm-life/shared';
 
 export function TaskCard({
@@ -94,7 +94,7 @@ export function TaskCard({
   const onPickTime = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value; // "HH:mm"
     if (!val) return;
-    const [h, m] = val.split(':').map(Number);
+    const [h, m] = val.split(':').map(Number) as [number, number];
     const { scheduledStart, scheduledEnd } = buildScheduleTimes(h, m, 60);
     schedule.mutate({ id: task.id, scheduledStart, scheduledEnd });
     setShowTime(false);
@@ -291,7 +291,7 @@ function DomainPicker({
       return;
     }
     update.mutate(
-      { id: taskId, domainKey: key },
+      { id: taskId, domainKey: key as (typeof DOMAIN_KEYS)[number] },
       {
         onSuccess: async () => {
           // SSE 兜底：写操作显式 invalidate，避免 dev proxy 偶发掉线时 UI 不刷新

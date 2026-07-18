@@ -4,6 +4,7 @@ import { trpc } from '../../lib/trpc';
 import { useUI } from '../../store/uiStore';
 import { cn } from '../../lib/cn';
 import type { TaskPriority } from '@dm-life/shared';
+import { DOMAIN_KEYS } from '@dm-life/shared';
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string; active: string }[] = [
   { value: 'high', label: '高', active: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
@@ -69,7 +70,7 @@ export function CommandPalette() {
     create.mutate({
       title: t,
       description: description.trim(),
-      domainKey,
+      domainKey: domainKey as (typeof DOMAIN_KEYS)[number],
       priority,
       // 选中的日期当日 09:00 落进日历；无日期的任务日历不展示
       scheduledStart: `${date}T09:00:00`,

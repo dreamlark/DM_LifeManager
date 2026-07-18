@@ -37,7 +37,7 @@ function reviewPriority(r: InterestRow, qfKeys: Set<string>, activeProjects: Set
 }
 
 function loadContext(): { qfKeys: Set<string>; activeProjects: Set<string> } {
-  const dRows = db.select({ key: domains.key, qf: domains.isQuarterFocus }).from(domains).all() as Array<{
+  const dRows = db.select({ key: domains.key, qf: domains.isQuarterFocus }).from(domains).all() as unknown as Array<{
     key: string;
     qf: number;
   }>;

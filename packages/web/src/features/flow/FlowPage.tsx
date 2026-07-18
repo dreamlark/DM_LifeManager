@@ -33,7 +33,7 @@ function scoreColor(score: number | null): string {
   const t = Math.max(0, Math.min(1, (score - 1) / 4));
   const lo = [75, 85, 99];
   const hi = [22, 163, 74];
-  const c = lo.map((l, i) => Math.round(l + (hi[i] - l) * t));
+  const c = lo.map((l, i) => Math.round(l + ((hi[i] ?? 0) - l) * t));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 

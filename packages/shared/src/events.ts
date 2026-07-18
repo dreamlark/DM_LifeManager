@@ -40,6 +40,9 @@ export interface TaskCompletedPayload {
   /** 注意力峰值：完成该任务时绑定 flow 专注时段的最高评分（1-5）；undefined=无专注数据 */
   attentionPeak?: number | null;
 }
+export interface TaskUncompletedPayload {
+  taskId: string;
+}
 export interface TaskUpdatedPayload {
   taskId: string;
   /** 实际被修改的字段及其新值（仅含本次变更） */
@@ -226,6 +229,40 @@ export interface FinanceAutoRefreshedPayload {
   skipped: number;
 }
 
+/** 财务：预算（整体/分类月度限额） */
+export interface BudgetCreatedPayload {
+  budgetId: string;
+  name: string;
+  monthlyLimit: number;
+  scope: 'overall' | 'category';
+  category: string | null;
+}
+export interface BudgetUpdatedPayload {
+  budgetId: string;
+  name: string;
+  monthlyLimit: number;
+  scope: 'overall' | 'category';
+  category: string | null;
+}
+export interface BudgetDeletedPayload {
+  budgetId: string;
+}
+
+/** 财务：金额互转（预留契约 P3） */
+export interface TransferCreatedPayload {
+  transferId: string;
+  fromAccountId: string;
+  toAccountId: string;
+  amountMinor: number;
+  currency: string;
+  occurredAt: string;
+}
+export interface TransferReversedPayload {
+  transferId: string;
+  reason: string | null;
+  reversedAt: string;
+}
+
 /** 笔记：编辑/删除（灵感与记事本共用） */
 export interface NoteUpdatedPayload {
   noteId: string;
@@ -250,6 +287,7 @@ export interface FocusSessionRecordedPayload {
 export type AppEvent =
   | { type: 'TaskCreated'; payload: TaskCreatedPayload }
   | { type: 'TaskCompleted'; payload: TaskCompletedPayload }
+  | { type: 'TaskUncompleted'; payload: TaskUncompletedPayload }
   | { type: 'TaskUpdated'; payload: TaskUpdatedPayload }
   | { type: 'InterestCaptured'; payload: InterestCapturedPayload }
   | { type: 'InterestUpdated'; payload: InterestUpdatedPayload }
@@ -286,6 +324,11 @@ export type AppEvent =
   | { type: 'NoteUpdated'; payload: NoteUpdatedPayload }
   | { type: 'NoteDeleted'; payload: NoteDeletedPayload }
   | { type: 'FocusSessionRecorded'; payload: FocusSessionRecordedPayload }
+  | { type: 'BudgetCreated'; payload: BudgetCreatedPayload }
+  | { type: 'BudgetUpdated'; payload: BudgetUpdatedPayload }
+  | { type: 'BudgetDeleted'; payload: BudgetDeletedPayload }
+  | { type: 'TransferCreated'; payload: TransferCreatedPayload }
+  | { type: 'TransferReversed'; payload: TransferReversedPayload }
   | { type: 'FinanceAutoRefreshed'; payload: FinanceAutoRefreshedPayload };
 
 export type AppEventType = AppEvent['type'];

@@ -22,7 +22,7 @@ export interface InsertSessionInput {
   now: string;
 }
 
-function parseInterruptions(v: string | null): Array<{ at: string; kind: string | null; reason?: string }> {
+function parseInterruptions(v: string | null): Array<{ at: string; kind: 'internal' | 'external' | null; reason?: string }> {
   if (!v) return [];
   try {
     const arr = JSON.parse(v);

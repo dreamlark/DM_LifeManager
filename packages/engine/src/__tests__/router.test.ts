@@ -56,4 +56,14 @@ describe('tRPC 路由层冒烟（进程内 createCaller）', () => {
     expect(Array.isArray(await caller.tasks.today())).toBe(true);
     expect(Array.isArray(await caller.domains.list())).toBe(true);
   });
+
+  it('system 路由挂载：dataStatus / exportAll 可经 createCaller 调用', async () => {
+    const caller = appRouter.createCaller({});
+    const status = await caller.system.dataStatus();
+    expect(status.schemaVersion).toBe(1);
+    expect(status.appVersion).toBeTruthy();
+    const bundle = await caller.system.exportAll();
+    expect(bundle.format).toBe('dm-life-export');
+    expect(typeof bundle.tables).toBe('object');
+  });
 });

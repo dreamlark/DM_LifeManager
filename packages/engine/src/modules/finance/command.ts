@@ -12,17 +12,27 @@ import {
   deleteIncomeSchema,
   deleteTransactionSchema,
   deleteAssetSchema,
+  createBudgetSchema,
+  updateBudgetSchema,
+  deleteBudgetSchema,
   updateIncomeSchema,
   updateTransactionSchema,
   recordIncomeSchema,
   recordTransactionSchema,
   recordAssetSchema,
   updateAssetSchema,
+  exportReportInputSchema,
+  transferCreateSchema,
+  transferListSchema,
+  transferGetSchema,
+  transferReverseSchema,
   type DebtView,
   type IncomeView,
   type TransactionView,
   type AssetView,
   type FinanceSummary,
+  type BudgetView,
+  type TransferView,
 } from '@dm-life/shared';
 
 /**
@@ -390,9 +400,90 @@ export function listAssets(): AssetView[] {
   return repo.listAssets();
 }
 
+/* ---------- 预算（整体/分类月度限额） ---------- */
+export function createBudget(input: unknown): BudgetView {
+  const data = createBudgetSchema.parse(input);
+  const id = nanoid();
+  const now = new Date().toISOString();
+  const scope = data.scope ?? 'overall';
+  const category = data.category ?? null;
+
+  const env = writeTx(() => {
+    repo.insertBudget({
+      id,
+      name: data.name,
+      scope,
+      category,
+      monthlyLimit: data.monthlyLimit,
+      note: data.note ?? '',
+      now,
+    });
+    return appendEvent({
+      type: 'BudgetCreated',
+      payload: { budgetId: id, name: data.name, monthlyLimit: data.monthlyLimit, scope, category },
+    });
+  });
+
+  eventBus.publish(env);
+  return repo.listBudgets().find((b) => b.id === id)!;
+}
+
+export function updateBudget(input: unknown): BudgetView {
+  const data = updateBudgetSchema.parse(input);
+  const now = new Date().toISOString();
+
+  const env = writeTx(() => {
+    const fields: Parameters<typeof repo.updateBudgetFields>[1] = {};
+    if (data.name !== undefined) fields.name = data.name;
+    if (data.scope !== undefined) fields.scope = data.scope;
+    if (data.category !== undefined) fields.category = data.category ?? null;
+    if (data.monthlyLimit !== undefined) fields.monthlyLimit = data.monthlyLimit;
+    if (data.note !== undefined) fields.note = data.note;
+    repo.updateBudgetFields(data.id, fields, now);
+    const b = repo.getBudget(data.id);
+    return appendEvent({
+      type: 'BudgetUpdated',
+      payload: {
+        budgetId: data.id,
+        name: b?.name ?? data.name ?? '',
+        monthlyLimit: b?.monthlyLimit ?? data.monthlyLimit ?? 0,
+        scope: (b?.scope as 'overall' | 'category') ?? 'overall',
+        category: b?.category ?? null,
+      },
+    });
+  });
+
+  eventBus.publish(env);
+  return repo.listBudgets().find((b) => b.id === data.id)!;
+}
+
+export function deleteBudget(input: unknown): void {
+  const { id } = deleteBudgetSchema.parse(input);
+  const env = writeTx(() => {
+    repo.deleteBudgetById(id);
+    return appendEvent({ type: 'BudgetDeleted', payload: { budgetId: id } });
+  });
+  eventBus.publish(env);
+}
+
+export function listBudgets(): BudgetView[] {
+  return repo.listBudgets();
+}
+
 /* ---------- 仪表盘 / 趋势 / 自动刷新 ---------- */
 export function summary(): FinanceSummary {
   return repo.summary();
+}
+
+/** 全局账目核对（只读，不写事件） */
+export function reconcile() {
+  return repo.reconcile();
+}
+
+/** 报表导出（只读，不写事件） */
+export function exportReport(input: unknown) {
+  const data = exportReportInputSchema.parse(input);
+  return repo.exportReport({ format: data.format, month: data.month });
 }
 
 export function monthlyTrend(months: number): { month: string; income: number; expense: number; net: number }[] {
@@ -407,4 +498,79 @@ export function autoRefresh(): { incomes: number; debts: number; skipped: number
   });
   eventBus.publish(res.env);
   return res.generated;
+}
+
+/* ---------- 金额互转（预留契约 P3） ---------- */
+/**
+ * 单一写路径：Zod 校验 → writeTx(幂等插入 + appendEvent) → eventBus.publish。
+ * 同 idempotencyKey 重复提交命中已存在记录时，不写新事件、直接返回首条结果。
+ */
+export function createTransfer(input: unknown): TransferView {
+  const data = transferCreateSchema.parse(input);
+  const id = nanoid();
+  const now = new Date().toISOString();
+  let view: TransferView | null = null;
+  let created = false;
+
+  const env = writeTx(() => {
+    view = repo.insertTransfer({
+      id,
+      fromAccountId: data.fromAccountId,
+      toAccountId: data.toAccountId,
+      amountMinor: data.amountMinor,
+      currency: data.currency,
+      occurredAt: data.occurredAt,
+      note: data.note ?? '',
+      idempotencyKey: data.idempotencyKey ?? null,
+      now,
+    });
+    // 幂等命中（已存在同 idempotencyKey 记录）：不写事件、不发布
+    if (view.id !== id) return null;
+    created = true;
+    return appendEvent({
+      type: 'TransferCreated',
+      payload: {
+        transferId: id,
+        fromAccountId: data.fromAccountId,
+        toAccountId: data.toAccountId,
+        amountMinor: data.amountMinor,
+        currency: data.currency,
+        occurredAt: data.occurredAt,
+      },
+    });
+  });
+
+  if (created && env) eventBus.publish(env);
+  return view!;
+}
+
+export function listTransfers(input: unknown): TransferView[] {
+  const data = transferListSchema.parse(input);
+  return repo.listTransfers({
+    limit: data.limit,
+    offset: data.offset,
+    accountId: data.accountId,
+  });
+}
+
+export function getTransfer(input: unknown): TransferView | undefined {
+  const data = transferGetSchema.parse(input);
+  return repo.getTransfer(data.id);
+}
+
+/** 撤销一笔转账（预留：仅置 reversed 标记，不自动回滚手动余额） */
+export function reverseTransfer(input: unknown): TransferView {
+  const data = transferReverseSchema.parse(input);
+  const now = new Date().toISOString();
+
+  const env = writeTx(() => {
+    repo.reverseTransfer(data.id, now);
+    return appendEvent({
+      type: 'TransferReversed',
+      payload: { transferId: data.id, reason: data.reason ?? null, reversedAt: now },
+    });
+  });
+
+  eventBus.publish(env);
+  return repo.getTransfer(data.id)!;
 }

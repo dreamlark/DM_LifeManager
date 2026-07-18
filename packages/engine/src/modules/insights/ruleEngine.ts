@@ -1,33 +1,41 @@
 import { db } from '../../db/client';
 import { tasks, debts, reminderClocks } from '../../db/schema';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { todayStr } from '../tasks/repository';
 
 /**
- * 每日回顾卡片（P0 stub）：基于现有任务做轻量聚合，不依赖向量检索。
- * 真实规则（压力背包评分、周回顾、领域平衡建议）P1 接入。
+ * 每日回顾卡片：基于指定日期的任务做轻量聚合，不依赖向量检索。
+ * 统计严格按日期区分：只计入 task_date = date（或遗留未设日期且当天）且非每日例行模板的任务，
+ * 不得把其他日期的任务计入当日统计。
  */
-export function dailyCard(): {
+export function dailyCard(date?: string): {
   total: number;
   done: number;
   mitCount: number;
   domainCounts: Record<string, number>;
 } {
-  const rows = db.select().from(tasks).all() as Array<{
-    domain_key: string;
-    status: string;
-    is_mit: number;
-  }>;
+  const target = date ?? todayStr();
+  const isToday = target === todayStr();
+
+  const rows = db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.repeat, 'none'), or(eq(tasks.taskDate, target), isNull(tasks.taskDate))))
+    .all() as unknown as Array<{ domain_key: string; status: string; is_mit: number; task_date: string | null }>;
+
+  // 遗留未设日期的浮动任务仅在「所选日期 = 今日」时计入，避免污染其他日期的统计
+  const scoped = rows.filter((r) => r.task_date !== null || isToday);
 
   const domainCounts: Record<string, number> = {};
   let done = 0;
   let mitCount = 0;
-  for (const r of rows) {
+  for (const r of scoped) {
     domainCounts[r.domain_key] = (domainCounts[r.domain_key] ?? 0) + 1;
     if (r.status === 'done') done += 1;
     if (r.is_mit) mitCount += 1;
   }
 
-  return { total: rows.length, done, mitCount, domainCounts };
+  return { total: scoped.length, done, mitCount, domainCounts };
 }
 
 /**

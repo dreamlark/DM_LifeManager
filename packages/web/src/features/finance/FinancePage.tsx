@@ -17,6 +17,7 @@ import {
   CalendarClock,
   Activity,
   AlertCircle,
+  Download,
 } from 'lucide-react';
 import { trpc } from '../../lib/trpc';
 import { SettleStatusTag } from '../../components/SettleStatusTag';
@@ -1515,6 +1516,94 @@ function AssetPanel() {
   );
 }
 
+/* ============ 账目核对 + 报表导出 ============ */
+function downloadFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function ReconcileExportPanel() {
+  const reconcileQ = trpc.finance.reconcile.useQuery(undefined, { enabled: false });
+  const [exportArg, setExportArg] = useState<{ format: 'csv' | 'json' } | null>(null);
+  const exportQ = trpc.finance.exportReport.useQuery(exportArg as any, { enabled: exportArg !== null });
+  const result = reconcileQ.data;
+
+  useEffect(() => {
+    if (exportQ.data) {
+      downloadFile(exportQ.data.filename, exportQ.data.content);
+      toast.success(`已导出 ${exportQ.data.filename}`);
+    }
+  }, [exportQ.data]);
+
+  return (
+    <Panel
+      title="账目核对 · 报表导出"
+      icon={Activity}
+      right={
+        <button
+          className={btnCls}
+          disabled={reconcileQ.isFetching}
+          onClick={() => reconcileQ.refetch()}
+        >
+          <RefreshCw size={12} className={reconcileQ.isFetching ? 'animate-spin' : ''} /> 账目核对
+        </button>
+      }
+    >
+      {result ? (
+        result.balanced ? (
+          <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+            <Check size={14} /> 账目平衡（净资产 {fmt(result.netWorth)}，资产 {fmt(result.assetsTotal)}，负债 {fmt(result.debtsTotal)}）
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+              <AlertCircle size={14} /> 发现 {result.discrepancies.length} 处账目差异
+            </div>
+            <ul className="space-y-1">
+              {result.discrepancies.map((d: any, i: number) => (
+                <li key={i} className="rounded-md bg-bg-base px-2 py-1.5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Badge tone="amber">{d.scope}</Badge>
+                    <span className="ml-auto text-gray-400">差额 {fmt(d.diff)}</span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-gray-400">{d.message}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      ) : (
+        <p className="text-xs text-gray-600">点击「账目核对」检查资产负债与还款流水一致性</p>
+      )}
+
+      <div className="mt-3 flex items-center gap-2 border-t border-bg-border/60 pt-3">
+        <span className="text-[11px] text-gray-500">导出报表：</span>
+        <button
+          className={btnCls}
+          disabled={exportQ.isFetching}
+          onClick={() => setExportArg({ format: 'csv' })}
+        >
+          <Download size={12} /> CSV
+        </button>
+        <button
+          className={btnCls}
+          disabled={exportQ.isFetching}
+          onClick={() => setExportArg({ format: 'json' })}
+        >
+          <Download size={12} /> JSON
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
 export function FinancePage() {
   const autoRefresh = trpc.finance.autoRefresh.useMutation();
   const utils = trpc.useUtils();
@@ -1543,6 +1632,7 @@ export function FinancePage() {
         </div>
       )}
       <SummaryCards />
+      <ReconcileExportPanel />
       <DebtProgressPopover />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <DebtPanel />

@@ -13,6 +13,9 @@ import {
   scheduleTaskSchema,
   setMitSchema,
   deleteTaskSchema,
+  ensureDailySchema,
+  DOMAIN_KEYS,
+  type TaskPriority,
   type TaskView,
 } from '@dm-life/shared';
 
@@ -25,10 +28,12 @@ export function createTask(input: unknown): TaskView {
   const data = createTaskSchema.parse(input);
   const id = nanoid();
   const now = new Date().toISOString();
+  // 非每日例行任务默认归属当天；每日例行模板 taskDate 置空（由 ensureDaily 实例化到具体日期）
+  const taskDate = data.taskDate ?? (data.repeat === 'daily' ? null : repo.todayStr());
 
   const env = writeTx(() => {
-    repo.insertTask({ id, ...data, now });
-    return appendEvent({
+    repo.insertTask({ id, ...data, taskDate, now });
+    return     appendEvent({
       type: 'TaskCreated',
       payload: {
         taskId: id,
@@ -116,8 +121,63 @@ export function scheduleTask(input: unknown): TaskView {
   return repo.getTask(data.id)!;
 }
 
-export function listToday(): TaskView[] {
-  return repo.listToday();
+export function listToday(date?: string): TaskView[] {
+  return repo.listForDate(date ?? repo.todayStr());
+}
+
+/** 每日例行：把 daily 模板实例化到指定日期（已存在则跳过）。走单一写路径。 */
+export function ensureDaily(input: unknown): void {
+  const { date } = ensureDailySchema.parse(input);
+  const envs = writeTx(() => {
+    const out: ReturnType<typeof appendEvent>[] = [];
+    for (const t of repo.listDailyTemplates()) {
+      if (repo.hasInstance(t.id, date)) continue;
+      const id = nanoid();
+      const now = new Date().toISOString();
+      const priority = (t.priority as TaskPriority) ?? 'medium';
+      repo.insertTask({
+        id,
+        title: t.title,
+        domainKey: (t.domainKey ?? 'work') as (typeof DOMAIN_KEYS)[number],
+        projectId: t.projectId,
+        importance: !!t.importance,
+        urgency: !!t.urgency,
+        isMit: false,
+        mitOrder: null,
+        scheduledStart: t.scheduledStart,
+        scheduledEnd: t.scheduledEnd,
+        dueAt: null,
+        description: t.description ?? '',
+        priority,
+        taskDate: date,
+        repeat: 'none',
+        sourceDailyId: t.id,
+        now,
+      });
+      out.push(
+        appendEvent({
+          type: 'TaskCreated',
+          payload: {
+            taskId: id,
+            title: t.title,
+            domainKey: (t.domainKey ?? 'work') as (typeof DOMAIN_KEYS)[number],
+            projectId: t.projectId,
+            importance: !!t.importance,
+            urgency: !!t.urgency,
+            isMit: false,
+            mitOrder: null,
+            scheduledStart: t.scheduledStart,
+            scheduledEnd: t.scheduledEnd,
+            dueAt: null,
+            description: t.description ?? '',
+            priority,
+          },
+        }),
+      );
+    }
+    return out;
+  });
+  for (const env of envs) eventBus.publish(env);
 }
 
 export function listAll(): TaskView[] {

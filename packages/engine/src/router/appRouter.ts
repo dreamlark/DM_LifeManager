@@ -10,6 +10,8 @@ import * as financeCommand from '../modules/finance/command';
 import * as remindersCommand from '../modules/reminders/command';
 import * as flowCommand from '../modules/flow/command';
 import { dailyCard, pressureBackpack } from '../modules/insights/ruleEngine';
+import { knowledgeBackend } from '../knowledge/KnowledgeBackend';
+import { systemRouter } from './system';
 
 import {
   createTaskSchema,
@@ -20,6 +22,7 @@ import {
   setQuadrantSchema,
   scheduleTaskSchema,
   setMitSchema,
+  ensureDailySchema,
   createProjectSchema,
   ingestNoteSchema,
   updateNoteSchema,
@@ -38,6 +41,10 @@ import {
   recordAssetSchema,
   updateAssetSchema,
   deleteAssetSchema,
+  createBudgetSchema,
+  updateBudgetSchema,
+  deleteBudgetSchema,
+  exportReportInputSchema,
   createReminderSchema,
   completeReminderSchema,
   rewindReminderSchema,
@@ -52,11 +59,20 @@ import {
   validateInterestSchema,
   convertInterestSchema,
   interestReviewQuerySchema,
+  transferCreateSchema,
+  transferListSchema,
+  transferGetSchema,
+  transferReverseSchema,
 } from '@dm-life/shared';
 
 export const appRouter = router({
   tasks: {
-    today: publicProcedure.query(() => tasksCommand.listToday()),
+    today: publicProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional())
+      .query(({ input }) => tasksCommand.listToday(input?.date)),
+    ensureDaily: publicProcedure
+      .input(ensureDailySchema)
+      .mutation(({ input }) => tasksCommand.ensureDaily(input)),
     all: publicProcedure.query(() => tasksCommand.listAll()),
     create: publicProcedure
       .input(createTaskSchema)
@@ -111,8 +127,9 @@ export const appRouter = router({
   },
   domains: {
     list: publicProcedure.query(() => domainsRepo.list()),
+    summary: publicProcedure.query(() => domainsRepo.summary()),
     balanceWheel: publicProcedure
-      .input(z.object({ week: z.string() }))
+      .input(z.object({ week: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'week 需为 YYYY-MM-DD（周一）') }))
       .query(({ input }) => domainsRepo.balanceWheel(input.week)),
   },
   projects: {
@@ -135,8 +152,16 @@ export const appRouter = router({
       .input(z.object({ kind: z.enum(['idea', 'notebook']).optional() }).optional())
       .query(({ input }) => notesCommand.listNotes(input?.kind)),
   },
+  knowledge: {
+    // 语义检索：基于本地向量 embedding + 余弦相似度，返回相关笔记（含相似度分数）
+    semanticSearch: publicProcedure
+      .input(z.object({ query: z.string().min(1), k: z.number().int().min(1).max(20).optional() }))
+      .query(({ input }) => knowledgeBackend.semanticSearch(input.query, input.k ?? 5)),
+  },
   insights: {
-    dailyCard: publicProcedure.query(() => dailyCard()),
+    dailyCard: publicProcedure
+      .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional())
+      .query(({ input }) => dailyCard(input?.date)),
     pressure: publicProcedure.query(() => pressureBackpack()),
   },
   finance: {
@@ -194,6 +219,32 @@ export const appRouter = router({
         .input(deleteAssetSchema)
         .mutation(({ input }) => financeCommand.deleteAsset(input)),
     },
+    budgets: {
+      list: publicProcedure.query(() => financeCommand.listBudgets()),
+      create: publicProcedure
+        .input(createBudgetSchema)
+        .mutation(({ input }) => financeCommand.createBudget(input)),
+      update: publicProcedure
+        .input(updateBudgetSchema)
+        .mutation(({ input }) => financeCommand.updateBudget(input)),
+      delete: publicProcedure
+        .input(deleteBudgetSchema)
+        .mutation(({ input }) => financeCommand.deleteBudget(input)),
+    },
+    transfers: {
+      list: publicProcedure
+        .input(transferListSchema)
+        .query(({ input }) => financeCommand.listTransfers(input)),
+      create: publicProcedure
+        .input(transferCreateSchema)
+        .mutation(({ input }) => financeCommand.createTransfer(input)),
+      get: publicProcedure
+        .input(transferGetSchema)
+        .query(({ input }) => financeCommand.getTransfer(input)),
+      reverse: publicProcedure
+        .input(transferReverseSchema)
+        .mutation(({ input }) => financeCommand.reverseTransfer(input)),
+    },
     summary: publicProcedure.query(() => financeCommand.summary()),
     debtSchedule: publicProcedure
       .input(z.object({ id: z.string().min(1) }))
@@ -205,6 +256,10 @@ export const appRouter = router({
     trend: publicProcedure
       .input(z.object({ months: z.number().int().min(1).max(24).optional() }))
       .query(({ input }) => financeCommand.monthlyTrend(input.months ?? 6)),
+    reconcile: publicProcedure.query(() => financeCommand.reconcile()),
+    exportReport: publicProcedure
+      .input(exportReportInputSchema)
+      .query(({ input }) => financeCommand.exportReport(input)),
     autoRefresh: publicProcedure.mutation(() => financeCommand.autoRefresh()),
   },
   reminders: {
@@ -247,6 +302,9 @@ export const appRouter = router({
       .input(flowSummaryQuerySchema)
       .query(({ input }) => flowCommand.summarize(input)),
   },
+
+  /** 系统：数据导出 / 导入 / 状态 */
+  system: systemRouter,
 });
 
 export type AppRouter = typeof appRouter;

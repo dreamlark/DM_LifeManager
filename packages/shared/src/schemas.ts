@@ -20,6 +20,10 @@ export const DOMAIN_KEYS = [
 export const TASK_PRIORITIES = ['low', 'medium', 'high'] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
+/** 重复规则：none=单次；daily=每日例行（按模板每日自动实例化到指定日期） */
+export const TASK_REPEAT = ['none', 'daily'] as const;
+export type TaskRepeat = (typeof TASK_REPEAT)[number];
+
 export const createTaskSchema = z.object({
   title: z.string().min(1).max(500),
   domainKey: z.enum(DOMAIN_KEYS),
@@ -35,6 +39,12 @@ export const createTaskSchema = z.object({
   description: z.string().max(5000).optional().default(''),
   /** 优先级：low / medium / high（默认 medium） */
   priority: z.enum(TASK_PRIORITIES).optional().default('medium'),
+  /** 任务所属日期（YYYY-MM-DD）；省略时非每日例行默认归为当天，每日例行模板为 null */
+  taskDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  /** 重复规则（默认 none） */
+  repeat: z.enum(TASK_REPEAT).optional().default('none'),
+  /** 每日例行实例的来源模板 id（系统写入，用户无需传） */
+  sourceDailyId: z.string().nullable().optional(),
 });
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 
@@ -67,6 +77,10 @@ export const updateTaskSchema = z
     priority: z.enum(TASK_PRIORITIES).optional(),
     /** 状态：待办/进行中/已完成/已归档（详情弹窗可编辑；done 实际由 complete 命令处理时间戳） */
     status: z.enum(['todo', 'doing', 'done', 'archived']).optional(),
+    /** 任务所属日期（YYYY-MM-DD）；可改到其他日期 */
+    taskDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    /** 重复规则 */
+    repeat: z.enum(TASK_REPEAT).optional(),
   })
   .refine((d) => Object.keys(d).length > 1, { message: '至少需要修改一个字段' });
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
@@ -96,6 +110,12 @@ export const setMitSchema = z.object({
   mitOrder: z.number().int().min(0).max(2).nullable().optional(),
 });
 export type SetMitInput = z.infer<typeof setMitSchema>;
+
+/** 每日例行：把标记为 daily 的模板任务实例化到指定日期（已存在则跳过） */
+export const ensureDailySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date 需为 YYYY-MM-DD'),
+});
+export type EnsureDailyInput = z.infer<typeof ensureDailySchema>;
 
 /* ============ 灵感孵化器 / 兴趣筛选器 ============ */
 
@@ -240,12 +260,19 @@ export const taskViewSchema = z.object({
   description: z.string(),
   priority: z.enum(TASK_PRIORITIES),
   createdAt: z.string(),
-  completedAt: z.string().nullable(),
-  /** MIT 完成质量（1-5 星）；null=未完成或跳过评分 */
-  completionQuality: z.number().int().nullable(),
-  /** 注意力峰值：完成该任务时绑定 flow 专注时段的最高评分（1-5）；null=无专注数据 */
-  attentionPeak: z.number().int().nullable(),
-});
+    completedAt: z.string().nullable(),
+    /** MIT 完成质量（1-5 星）；null=未完成或跳过评分 */
+    completionQuality: z.number().int().nullable(),
+    /** 注意力峰值：完成该任务时绑定 flow 专注时段的最高评分（1-5）；null=无专注数据 */
+    attentionPeak: z.number().int().nullable(),
+    /** 任务所属日期（YYYY-MM-DD）；每日例行模板为 null，实例为具体日期 */
+    taskDate: z.string().nullable(),
+    /** 重复规则 none / daily */
+    repeat: z.enum(TASK_REPEAT),
+    /** 每日例行实例的来源模板 id；非实例为 null */
+    sourceDailyId: z.string().nullable(),
+  },
+);
 export type TaskView = z.infer<typeof taskViewSchema>;
 
 export const domainViewSchema = z.object({
@@ -255,6 +282,41 @@ export const domainViewSchema = z.object({
   color: z.string(),
 });
 export type DomainView = z.infer<typeof domainViewSchema>;
+
+/** 每领域聚合视图（领域完整聚合）：任务总数 / 已完成 / 进行中 + 累计专注分钟 + 完成率 */
+export const domainSummarySchema = z.object({
+  key: z.string(),
+  name: z.string(),
+  color: z.string(),
+  isQuarterFocus: z.boolean(),
+  taskTotal: z.number().int(),
+  taskDone: z.number().int(),
+  taskActive: z.number().int(),
+  /** 该领域累计专注分钟（来自 focus_sessions，全量） */
+  focusMinutes: z.number().int(),
+  /** 完成率 = taskDone / taskTotal（无任务为 0） */
+  doneRate: z.number(),
+});
+export type DomainSummary = z.infer<typeof domainSummarySchema>;
+
+/** 平衡轮视图：给定周（周一 YYYY-MM-DD）内各领域投入分钟 + 归一化得分 + 压力代理 */
+export const domainBalanceWheelSchema = z.object({
+  week: z.string(),
+  wheel: z.array(
+    z.object({
+      key: z.string(),
+      name: z.string(),
+      color: z.string(),
+      minutes: z.number().int(),
+      /** 相对当周最大投入领域的归一化得分 0-100 */
+      score: z.number().int(),
+    }),
+  ),
+  domainMinutes: z.record(z.string(), z.number().int()),
+  /** 开放任务数（todo+doing）最多的领域 key，取前 3（压力代理） */
+  topStresses: z.array(z.string()),
+});
+export type DomainBalanceWheel = z.infer<typeof domainBalanceWheelSchema>;
 
 export const projectViewSchema = z.object({
   id: z.string(),
@@ -406,6 +468,8 @@ export const debtViewSchema = z.object({
   note: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // 剩余本金（引擎按还款计划实时推算），共享快照用，避免家庭端显示 ¥0
+  remainingPrincipal: z.number(),
 });
 export type DebtView = z.infer<typeof debtViewSchema>;
 
@@ -455,6 +519,98 @@ export const assetViewSchema = z.object({
 });
 export type AssetView = z.infer<typeof assetViewSchema>;
 
+/* 预算：整体/分类的月度支出限额，spent/remaining/progress 由引擎按当月流水实时计算 */
+export const budgetViewSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  scope: z.enum(['overall', 'category']),
+  category: z.string().nullable(),
+  monthlyLimit: z.number(),
+  /** 当月已支出（overall=全部支出；category=该分类支出） */
+  spent: z.number(),
+  /** 剩余可用 = monthlyLimit - spent */
+  remaining: z.number(),
+  /** 进度 0..1（超额可 >1，前端截断到 1 显示） */
+  progress: z.number(),
+  note: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type BudgetView = z.infer<typeof budgetViewSchema>;
+
+export const createBudgetSchema = z.object({
+  name: z.string().min(1).max(200),
+  scope: z.enum(['overall', 'category']).default('overall'),
+  category: z.string().max(100).nullable().optional(),
+  monthlyLimit: z.number().positive('限额必须大于 0'),
+  note: z.string().max(500).optional(),
+});
+export type CreateBudgetInput = z.infer<typeof createBudgetSchema>;
+
+export const updateBudgetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).max(200).optional(),
+  scope: z.enum(['overall', 'category']).optional(),
+  category: z.string().max(100).nullable().optional(),
+  monthlyLimit: z.number().positive().optional(),
+  note: z.string().max(500).optional(),
+});
+export type UpdateBudgetInput = z.infer<typeof updateBudgetSchema>;
+
+export const deleteBudgetSchema = z.object({
+  id: z.string().min(1),
+});
+export type DeleteBudgetInput = z.infer<typeof deleteBudgetSchema>;
+
+/* 金额互转（预留契约 P3）：一笔转账原子地从 from 账户借记、to 账户贷记。
+   金额以整数「分」(amountMinor) 存储，规避浮点误差；idempotencyKey 唯一约束防重复提交。
+   注：本契约只建立「转账记录」事实，不自动改写 assets.value（手动余额不被动），
+   后续 P4 阶段可在同一写路径内扩展余额联动。 */
+export const transferCreateSchema = z.object({
+  fromAccountId: z.string().min(1),
+  toAccountId: z.string().min(1),
+  amountMinor: z.number().int().positive('金额必须为正整数（单位：分）'),
+  currency: z.string().min(1).max(8).optional().default('CNY'),
+  occurredAt: z.string().min(1),
+  note: z.string().max(500).optional().default(''),
+  /** 幂等键：相同键重复提交返回首次结果，避免网络重试造成重复转账 */
+  idempotencyKey: z.string().min(1).max(100).optional(),
+});
+export type TransferCreateInput = z.infer<typeof transferCreateSchema>;
+
+export const transferListSchema = z.object({
+  limit: z.number().int().min(1).max(500).optional().default(100),
+  offset: z.number().int().min(0).optional().default(0),
+  /** 仅看与某账户相关的转账（作为 from 或 to） */
+  accountId: z.string().optional(),
+});
+export type TransferListInput = z.infer<typeof transferListSchema>;
+
+export const transferGetSchema = z.object({ id: z.string().min(1) });
+export type TransferGetInput = z.infer<typeof transferGetSchema>;
+
+/** 撤销一笔转账（预留：当前仅记录 reversed 标记，不自动回滚余额） */
+export const transferReverseSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().max(500).optional(),
+});
+export type TransferReverseInput = z.infer<typeof transferReverseSchema>;
+
+export const transferViewSchema = z.object({
+  id: z.string(),
+  fromAccountId: z.string(),
+  toAccountId: z.string(),
+  amountMinor: z.number(),
+  currency: z.string(),
+  occurredAt: z.string(),
+  note: z.string(),
+  idempotencyKey: z.string().nullable(),
+  reversed: z.boolean(),
+  reversedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type TransferView = z.infer<typeof transferViewSchema>;
+
 export const financeSummarySchema = z.object({
   totalDebt: z.number(),
   monthlyMinPayment: z.number(),
@@ -472,6 +628,17 @@ export const financeSummarySchema = z.object({
   incomeSourceCount: z.number(),
 });
 export type FinanceSummary = z.infer<typeof financeSummarySchema>;
+
+/* ============ 报表导出输入 ============ */
+export const exportReportInputSchema = z.object({
+  format: z.enum(['csv', 'json']),
+  /** 形如 '2026-07'，仅过滤 transactions 明细；省略则导出全部 */
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/, '月份格式应为 YYYY-MM')
+    .optional(),
+});
+export type ExportReportInput = z.infer<typeof exportReportInputSchema>;
 
 /* ============ 提醒钟表铺（P1） ============ */
 

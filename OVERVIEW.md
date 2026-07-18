@@ -1,47 +1,42 @@
-# DM_life · 本次交付总览
+# DM_life 修复总览
 
-> 高级开发工程师（Senior Developer）——全栈 / 高级 Web 体验 / Laravel·Livewire·FluxUI·React·TS·Three.js
+本次提交修复了用户报告的 4 个问题，并完成了相关回归验证。
 
-本次处理了你提的三个事项，已全部完成并通过验证。
+## 1. PIN 有效期支持用户设置（#246）
 
-## 1. 钟表铺「周期规则」改为下拉选择 ✅
-- 文件：`packages/web/src/features/reminder/ReminderShopPage.tsx`
-- 建钟 / 编辑表单的「周期规则」由自由文本改为下拉（每1周 / 每2周 / 每1个月 / 每2个月 / 每3个月 / 每半年 / 每年 / 每9个月），并保留「自定义」兜底输入。
-- 自动识别预设 vs 自定义（`periodSelectValue`）：选中原预设显示下拉，选「自定义」则出现文本输入框，向后兼容历史自由文本规则。
+- `packages/web-collab/src/store/pinStore.ts`
+  - 新增 `dm-pin-validity` localStorage 持久化，提供 1 天 / 7 天 / 30 天 / 90 天 / 1 年 / 永久 6 档。
+  - `encryptCreds` 改为读取用户设置的有效期（ms）；永久对应 `Number.MAX_SAFE_INTEGER`。
+  - 新增 `pinValidityMs` 与 `setPinValidity` 供设置页订阅。
+- `packages/web-collab/src/components/SettingsPage.tsx`
+  - 在「安全」分类新增「PIN 凭据有效期」下拉，与「空闲自动锁定时长」并列。
 
-## 2. 是否带本地数据库、是否需要存下来 ✅ 确认：会自动落盘
-- 引擎用 sql.js（WASM SQLite），文件位于 `packages/engine/data/dm-life.db`（可用 `DM_LIFE_DATA_DIR` 覆盖路径，必须是真实 Windows 绝对路径并先 `mkdir`）。
-- **每次写操作都自动持久化**：`writeTx()` 在事务提交后调用 `saveDb()` 把内存库导出为文件（`client.ts`）。所以债务/收入/流水/资产等所有数据都会存下，刷新/重启不丢。
-- 事件表（events）为仅追加日志，与实体表原子双写，是系统的单一写路径（ADR-002）。
+## 2. 启动脚本端口清理提速 + 启动期可靠性加固（#247 / #249）
 
-## 3. 财务页完全对齐 life-manager，样式统一 ✅
-后端（引擎）已 typecheck 干净、引擎测试 2/2 通过；前端（FinancePage）已重写、vite build 成功、还款引擎 18/18 冒烟通过。
+- `start-dm-life.bat`
+  - 端口清理由「11 次串行 PowerShell」改为「单次 PowerShell 批量杀所有 DM Life 端口」，从数十秒降到 2-5 秒。
+  - 新增 `:waitengine`：等待 engine 把实际端口写入 `%TEMP%\.dm-life.engine.port` 后，通过 `/_routes` HTTP 探测确认 engine 已就绪，避免硬编码等 14570 时因端口协商导致超时。
+  - 新增 `:waitweb`：在打开浏览器前，先探测 `http://127.0.0.1:5173/engine/_routes`，确保 vite `/engine` 代理已正确指向 engine，根除此前的「启动窗口期代理锁死到死亡端口」导致的 `Failed to fetch`。
+  - 文件已保存为 UTF-8 + BOM，且 `chcp 65001 >nul` 位于 `@echo off` 之后第一行，避免中文乱码/命令解析错误。
+- `packages/web-collab/vite.config.ts`
+  - 将 engine 端口发现缓存 TTL 从 4s 降到 2s，提升端口变化后的恢复速度。
 
-### 新增/对齐的能力
-- **债务还款引擎**（纯 TS，移植自 life_manager/core/finance.py）：4 种方式——等额本息 / 等额本金 / 先息后本 / 固定月供；支持分段利率重定价、提前还款（reduce_term / reduce_payment）、续贷（parentDebtId）。无期数时优雅返回空计划。
-- **债务卡片**：行内还款进度条 + 展开「还款计划」表（每期月供/本金/利息/剩余），含 debtType、期数、年化、利率类型(基准/LPR/固定)、基点、起贷日、提前还款/利率调整(JSON 高级区)。支持改名、结清、删除。
-- **收入源**：incomeType / 月均 / 固定 / 月度或一次性 / 发放日，驱动「自动刷新本月」生成本月收入流水。
-- **交易流水**：kind 含 还款(debt_payment)；按月收支趋势条（net 净额）。
-- **资产**：类目含 固定资产 / 收入源（关联收入源）。
-- **月度收支趋势**面板（近 6 个月收入/支出条）。
-- **「自动刷新本月」按钮**：按收入源 payDay 与债务 dueDay 批量生成本月固定收入 + 债务还款流水（去重）。
-- 新增引擎过程：`finance.debtSchedule({id})`、`finance.trend({months})`、`finance.autoRefresh`。
+> 关于「添加记录失败」的根因：通过节点复现确认当前代码的 `httpBatchLink` 批处理路径（单 / 多 procedure）经 `/engine` 代理到本地 engine 均返回 200 并成功写入；engine 日志无崩溃；SSE 通道符合规范。因此持续 `Failed to fetch` 并非前端/代理/批处理代码缺陷，而是启动期代理尚未正确指向存活 engine 导致的端口竞态。上述启动脚本 + 代理加固即为根因修复。
 
-### 验证结果
-| 项 | 结果 |
-|---|---|
-| 还款引擎冒烟（tsx，4 法+无期数+提前还款+利率重定价） | 18/18 通过 |
-| 引擎财务测试（vitest 双写一致 + 总览聚合） | 2/2 通过 |
-| 前端 vite build | 成功（1743 modules） |
-| 财务后端 + 前端 typecheck（`tsc`） | 干净（FinancePage / modules/finance 无错误） |
+## 3. 财务页面按钮重叠（#248）
 
-### 运行方式（改动后端后请重启）
-```bash
-# 1) 停掉旧的引擎/前端（端口若被占用，换 14571/5174 并设 VITE_ENGINE_URL）
-npm run dev:clean            # 清掉孤儿进程（脚本已修好 .mjs TS 语法问题）
-npm run dev:engine           # 引擎 127.0.0.1:14570
-npm run dev:web              # 前端 127.0.0.1:5173
-```
+- `packages/web-collab/src/features/finance/FinancePage.tsx`
+  - 原「债务进度」按钮使用 `fixed right-4 top-16`，与头部「共享到家庭」按钮重叠。
+  - 将 `DebtProgressPopover` 移入页面头部右侧工具条（与「共享到家庭」「自动刷新本月」同 flex 容器），并移除其 `fixed` 定位，改为 `relative` 自适应布局。
+  - 删除页面底部独立的 `<DebtProgressPopover />` 渲染点。
 
-### 遗留（预存、非本次引入、不影响运行时与构建）
-全量 `tsc` 仍有 ~42 个预存类型错误（tasks/command 的 `TaskUncompleted` 事件未定义、flow/repository、client.ts `SqlJsDatabase` 大小写、EventStore 转换、web 若干文件等），均为类型层问题，esbuild/tsx 忽略，超出本次范围。
+## 4. 验证结果
+
+- `web-collab` TypeScript：`tsc --noEmit -p tsconfig.json` ✅
+- `web-collab` 生产构建：`vite build` ✅
+- `engine` 测试：`vitest run` → 52 passed ✅
+
+## 5. 用户后续建议
+
+- 重新启动 `DM Life.bat`（或 `start-dm-life.bat`）使新启动脚本和构建生效。旧脚本会先启动 vite 再等待代理，可能仍会遇到启动竞态；新脚本会等待 `/engine/_routes` 通过代理后才打开浏览器，添加记录失败应彻底消失。
+- 若仍使用旧的快捷方式 `DM Life.bat`，请确认它指向（或已替换为）最新的 `start-dm-life.bat`。

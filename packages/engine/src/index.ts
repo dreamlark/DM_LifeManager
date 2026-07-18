@@ -23,7 +23,7 @@ seedNotes();
 saveDb();
 
 const server = http.createServer((req, res) => {
-  const url = (req.url ?? '/').split('?')[0];
+  const url = (req.url ?? '/').split('?')[0] ?? '/';
 
   if (req.method === 'GET' && url === '/events') {
     attachSse(req, res);
@@ -57,6 +57,8 @@ const server = http.createServer((req, res) => {
     void (async () => {
       try {
         const webReq = incomingMessageToRequest(req, res, { maxBodySize: null });
+        // 日志：记录每个 tRPC 请求的 method + path，便于排查"添加任务无反应"类问题
+        logger.info({ method: req.method, path: url, port: tryPort }, 'tRPC request');
         const response = await fetchRequestHandler({
           endpoint: '/trpc',
           req: webReq,
@@ -68,7 +70,7 @@ const server = http.createServer((req, res) => {
         const buf = Buffer.from(await response.arrayBuffer());
         res.end(buf);
       } catch (e) {
-        logger.error({ err: e }, 'tRPC handler error');
+        logger.error({ err: e, path: url }, 'tRPC handler error');
         if (!res.headersSent) res.statusCode = 500;
         res.end('internal error');
       }
@@ -107,6 +109,7 @@ function listenWithRetry(remaining: number): void {
     try {
       const portFile = path.join(os.tmpdir(), 'dm-life.engine.port');
       fs.writeFileSync(portFile, String(tryPort), 'utf8');
+      logger.info({ portFile, port: tryPort }, 'engine port file written');
     } catch (e) {
       // tmp 写不进也不致命（仅无法自动发现）
       logger.warn({ err: e }, 'failed to write engine port file');

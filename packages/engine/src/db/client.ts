@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import initSqlJs, { type Database } from 'sql.js';
 import { drizzle, type SQLJsDatabase } from 'drizzle-orm/sql-js';
 import * as schema from './schema';
-import { config } from '../config';
+import { config, getDefaultDataDir } from '../config';
 import { logger } from '../logging';
 
 /** 解析数据库文件路径：放在 config.dataDir 下（默认已是操作系统用户数据目录，与安装目录隔离） */
@@ -50,6 +50,22 @@ export async function initDb(): Promise<void> {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     fs.copyFileSync(LEGACY_DB_PATH, dbPath);
     logger.info({ from: LEGACY_DB_PATH, to: dbPath }, 'migrated database to persistent data directory');
+  }
+
+  // 自定义数据目录迁移：用户通过「设置 → 数据目录」改了保存位置后，重启首次启动时
+  // 若新目录尚无 db、但默认用户数据目录（上一处）有 db，则安全复制过来，避免改路径导致旧数据“凭空消失”。
+  // 测试环境跳过，避免把开发/冒烟产生的旧数据误当真实用户数据迁移。
+  const defaultDbPath = path.join(getDefaultDataDir(), 'dm-life.db');
+  if (
+    !isTest &&
+    !process.env.DM_LIFE_DATA_DIR &&
+    config.dataDir !== getDefaultDataDir() &&
+    !fs.existsSync(dbPath) &&
+    fs.existsSync(defaultDbPath)
+  ) {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    fs.copyFileSync(defaultDbPath, dbPath);
+    logger.info({ from: defaultDbPath, to: dbPath }, 'migrated database to custom data directory');
   }
 
   if (fs.existsSync(dbPath)) {

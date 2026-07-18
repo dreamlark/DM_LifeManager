@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Command, Bell, Brain, Activity, BookOpen, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { trpc } from '../../lib/trpc';
 import { useUI } from '../../store/uiStore';
@@ -80,26 +81,49 @@ function LowAttentionAlerts() {
   );
 }
 
-function RecentNotes() {
-  const { data } = trpc.notes.list.useQuery();
-  const items = (data ?? []).slice(0, 3);
+function RelatedMemory() {
+  const { data: today } = trpc.tasks.today.useQuery();
+  const mitTitles = (today ?? [])
+    .filter((t) => t.isMit)
+    .map((t) => t.title)
+    .join(' ');
+  const [q, setQ] = useState('');
+  const query = q.trim() || mitTitles;
+  const { data, isLoading } = trpc.knowledge.semanticSearch.useQuery(
+    { query, k: 4 },
+    { enabled: query.length > 0 },
+  );
+  const items = data ?? [];
 
   return (
     <div className="rounded-xl border border-bg-border bg-bg-panel px-3 py-2.5">
       <div className="mb-1.5 flex items-center gap-2">
         <Brain size={16} className="text-accent" />
         <span className="text-sm text-gray-200">相关记忆</span>
-        <span className="ml-auto text-[10px] text-gray-500">{items.length} 条最近</span>
+        <span className="ml-auto text-[10px] text-gray-500">{items.length} 条相关</span>
       </div>
-      {items.length === 0 ? (
-        <div className="text-[11px] text-gray-600">记录灵感后，这里会显示最近笔记</div>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder={mitTitles ? '搜索记忆（默认按今日要事）' : '搜索记忆…'}
+        className="mb-2 w-full rounded-lg border border-bg-border bg-bg-base px-2 py-1 text-[11px] text-gray-200 outline-none placeholder:text-gray-600 focus:border-accent/50"
+      />
+      {query.length === 0 ? (
+        <div className="text-[11px] text-gray-600">标记要事或输入关键词，这里会显示语义相关的笔记</div>
+      ) : isLoading ? (
+        <div className="text-[11px] text-gray-600">检索中…</div>
+      ) : items.length === 0 ? (
+        <div className="text-[11px] text-gray-600">暂无相关笔记，先记录灵感吧</div>
       ) : (
-        <ul className="space-y-1">
-          {items.map((n) => (
-            <li key={n.id} className="flex items-center gap-1.5 text-[11px]">
-              <BookOpen size={11} className="shrink-0 text-gray-500" />
-              <span className="truncate text-gray-300">{n.title}</span>
-              <span className="ml-auto shrink-0 text-gray-500">{relTime(n.createdAt)}</span>
+        <ul className="space-y-1.5">
+          {items.map((h) => (
+            <li key={h.id} className="text-[11px]">
+              <div className="flex items-center gap-1.5">
+                <BookOpen size={11} className="shrink-0 text-gray-500" />
+                <span className="truncate text-gray-300">{h.title}</span>
+                <span className="ml-auto shrink-0 text-gray-500">{Math.round(h.score * 100)}%</span>
+              </div>
+              <div className="truncate pl-3.5 text-[10px] text-gray-600">{h.snippet}</div>
             </li>
           ))}
         </ul>
@@ -180,7 +204,7 @@ export function RightColumn() {
 
       <ReminderSummary />
 
-      <RecentNotes />
+      <RelatedMemory />
     </div>
   );
 }

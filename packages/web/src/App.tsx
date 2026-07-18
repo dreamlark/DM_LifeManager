@@ -27,6 +27,7 @@ import { FlowPage } from './features/flow/FlowPage';
 import { MindMapPage } from './features/mindmap/MindMapPage';
 import { IncubatorPage } from './features/interests/IncubatorPage';
 import { CalendarPage } from './features/calendar/CalendarPage';
+import { DomainBalancePage } from './features/domains/DomainBalancePage';
 import { CommandPalette } from './features/command-palette/CommandPalette';
 import { TaskDetailDialog } from './features/board/TaskDetailDialog';
 import { Toaster } from 'sonner';
@@ -34,7 +35,7 @@ import { Toaster } from 'sonner';
 const QUADRANT_KEYS = ['q1', 'q2', 'q3', 'q4'];
 const resolveId = (id: string) => id.replace(/^(mit-|slot-)/, '');
 
-type Tab = 'board' | 'finance' | 'reminder' | 'notes' | 'flow' | 'incubator' | 'mindmap' | 'calendar';
+type Tab = 'board' | 'finance' | 'reminder' | 'notes' | 'flow' | 'incubator' | 'mindmap' | 'calendar' | 'domains';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('board');
@@ -125,6 +126,7 @@ export default function App() {
             <TabBtn id="mindmap" label="脑图" />
             <TabBtn id="calendar" label="日历" />
             <TabBtn id="flow" label="心流" />
+            <TabBtn id="domains" label="平衡轮" />
             <TabBtn id="incubator" label="孵化器" />
           </nav>
           <span className="ml-auto text-xs text-gray-500">
@@ -142,6 +144,8 @@ export default function App() {
                 ? 'P1 · 日历'
               : tab === 'flow'
                 ? 'P1 · 心流'
+              : tab === 'domains'
+                ? 'P1 · 领域平衡轮'
               : 'P1 · 灵感孵化器'}
           </span>
           <button
@@ -171,6 +175,8 @@ export default function App() {
             <CalendarPage />
           ) : tab === 'flow' ? (
             <FlowPage />
+          ) : tab === 'domains' ? (
+            <DomainBalancePage />
           ) : tab === 'incubator' ? (
             <IncubatorPage />
           ) : null}

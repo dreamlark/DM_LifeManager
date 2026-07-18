@@ -1,9 +1,16 @@
 import { db } from '../../db/client';
 import { tasks } from '../../db/schema';
-import { eq, asc } from 'drizzle-orm';
-import type { CreateTaskInput, TaskView } from '@dm-life/shared';
+import { and, asc, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import type { CreateTaskInput, TaskRepeat, TaskView } from '@dm-life/shared';
 
 type TaskRow = typeof tasks.$inferSelect;
+
+/** 本地时区今日日期（YYYY-MM-DD），用于任务日期默认值与每日例行实例化 */
+export function todayStr(): string {
+  const d = new Date();
+  const p = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 function quadrantOf(row: Pick<TaskRow, 'importance' | 'urgency'>): TaskView['quadrant'] {
   if (row.importance && row.urgency) return 'q1';
@@ -33,13 +40,29 @@ function rowToView(row: TaskRow): TaskView {
     completedAt: row.completedAt,
     completionQuality: row.completionQuality ?? null,
     attentionPeak: row.attentionPeak ?? null,
+    taskDate: row.taskDate ?? null,
+    repeat: (row.repeat as TaskRepeat) ?? 'none',
+    sourceDailyId: row.sourceDailyId ?? null,
   };
 }
 
-/** 今日看板：返回全部任务并标注象限（P0 不做日期过滤，展示全量） */
-export function listToday(): TaskView[] {
-  const rows = db.select().from(tasks).orderBy(asc(tasks.mitOrder), asc(tasks.createdAt)).all();
+/**
+ * 按日期返回看板任务：筛选 task_date = date（或遗留未设日期的浮动任务）且非每日例行模板，
+ * 排序按重要程度降序、同重要时按时间（计划开始时间，无则创建时间）升序。
+ */
+export function listForDate(date: string): TaskView[] {
+  const rows = db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.repeat, 'none'), or(eq(tasks.taskDate, date), isNull(tasks.taskDate))))
+    .orderBy(desc(tasks.importance), asc(sql`coalesce(${tasks.scheduledStart}, ${tasks.createdAt})`))
+    .all();
   return (rows as TaskRow[]).map(rowToView);
+}
+
+/** 今日看板（默认归为当天），兼容旧调用 */
+export function listToday(): TaskView[] {
+  return listForDate(todayStr());
 }
 
 /** 日历等场景：返回全部任务（含描述/优先级），按 scheduledStart 升序。 */
@@ -53,7 +76,9 @@ export function getTask(id: string): TaskView | null {
   return row ? rowToView(row) : null;
 }
 
-export function insertTask(p: { id: string } & CreateTaskInput & { now: string }): void {
+export function insertTask(
+  p: { id: string } & CreateTaskInput & { now: string; taskDate?: string | null; repeat?: TaskRepeat; sourceDailyId?: string | null },
+): void {
   db.insert(tasks)
     .values({
       id: p.id,
@@ -70,10 +95,28 @@ export function insertTask(p: { id: string } & CreateTaskInput & { now: string }
       dueAt: p.dueAt ?? null,
       description: p.description ?? '',
       priority: p.priority ?? 'medium',
+      taskDate: p.taskDate ?? null,
+      repeat: p.repeat ?? 'none',
+      sourceDailyId: p.sourceDailyId ?? null,
       createdAt: p.now,
       updatedAt: p.now,
     })
     .run();
+}
+
+/** 每日例行模板（repeat='daily'） */
+export function listDailyTemplates(): TaskRow[] {
+  return db.select().from(tasks).where(eq(tasks.repeat, 'daily')).all() as TaskRow[];
+}
+
+/** 某模板在某日期是否已实例化 */
+export function hasInstance(sourceDailyId: string, date: string): boolean {
+  const row = db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.sourceDailyId, sourceDailyId), eq(tasks.taskDate, date)))
+    .get();
+  return Boolean(row);
 }
 
 export function markComplete(

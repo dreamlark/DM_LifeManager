@@ -48,6 +48,13 @@ export function toLocalInput(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** 本地时区的今日日期（YYYY-MM-DD），用于前端任务日期默认值与看板日期比较 */
+export function todayStr(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /** 相对当前时间的中文描述：今天 / 明天 / N 天后 / 逾期 N 天 */
 export function relTime(iso: string): string {
   const diff = new Date(iso).getTime() - Date.now();

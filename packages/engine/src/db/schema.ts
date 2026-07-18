@@ -71,12 +71,20 @@ export const tasks = sqliteTable(
     completionQuality: integer('completion_quality'),
     /** 注意力峰值：完成该任务时，绑定 flow 专注时段的最高评分（1-5）；null=无专注数据 */
     attentionPeak: integer('attention_peak'),
+    /** 任务所属日期（YYYY-MM-DD）；每日例行模板为 null，实例为具体日期 */
+    taskDate: text('task_date'),
+    /** 重复规则 none / daily（每日例行按模板每日实例化） */
+    repeat: text('repeat', { enum: ['none', 'daily'] }).notNull().default('none'),
+    /** 每日例行实例的来源模板 id；非实例为 null */
+    sourceDailyId: text('source_daily_id'),
     updatedAt: text('updated_at').notNull(),
   },
   (t) => ({
     idxDomain: index('idx_tasks_domain').on(t.domainKey, t.status),
     idxMit: index('idx_tasks_mit').on(t.isMit, t.mitOrder),
     idxDue: index('idx_tasks_due').on(t.dueAt),
+    idxTaskDate: index('idx_tasks_date').on(t.taskDate),
+    idxDaily: index('idx_tasks_daily').on(t.sourceDailyId, t.taskDate),
   }),
 );
 
@@ -149,6 +157,7 @@ export const notes = sqliteTable(
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     embeddedAt: text('embedded_at'),
+    embedding: text('embedding'),
   },
   (t) => ({
     idxEmbedded: index('idx_notes_embedded').on(t.embeddedAt),
@@ -257,6 +266,24 @@ export const assets = sqliteTable(
   }),
 );
 
+/** 预算（整体/分类月度支出限额；spent 等由引擎实时计算，不落库） */
+export const budgets = sqliteTable(
+  'budgets',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    scope: text('scope', { enum: ['overall', 'category'] }).notNull().default('overall'),
+    category: text('category'),
+    monthlyLimit: real('monthly_limit').notNull(),
+    note: text('note').notNull().default(''),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    idxBudgetScope: index('idx_budgets_scope').on(t.scope),
+  }),
+);
+
 /* ============ 提醒钟表铺（P1） ============ */
 
 /**
@@ -312,5 +339,34 @@ export const focusSessions = sqliteTable(
     idxFocusDomain: index('idx_focus_domain').on(t.domainKey),
     idxFocusProject: index('idx_focus_project').on(t.projectId),
     idxFocusTask: index('idx_focus_task').on(t.taskId),
+  }),
+);
+
+/* ============ 金额互转（预留契约 P3） ============ */
+/**
+ * 一笔账户间转账：原子地从 from 借记、to 贷记（单一写路径内双写 events + 本表）。
+ * - amount_minor：整数「分」，规避浮点误差。
+ * - idempotency_key：唯一约束，重复提交返回首次结果，防网络重试造成重复转账。
+ * - reversed / reversed_at：撤销标记（预留；当前不自动回滚手动余额）。
+ */
+export const financeTransfers = sqliteTable(
+  'finance_transfers',
+  {
+    id: text('id').primaryKey(),
+    fromAccountId: text('from_account_id').notNull(),
+    toAccountId: text('to_account_id').notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: text('currency').notNull().default('CNY'),
+    occurredAt: text('occurred_at').notNull(),
+    note: text('note').notNull().default(''),
+    idempotencyKey: text('idempotency_key').unique(),
+    reversed: integer('reversed').notNull().default(0),
+    reversedAt: text('reversed_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    idxTransferFrom: index('idx_transfer_from').on(t.fromAccountId),
+    idxTransferTo: index('idx_transfer_to').on(t.toAccountId),
+    idxTransferAt: index('idx_transfer_at').on(t.occurredAt),
   }),
 );

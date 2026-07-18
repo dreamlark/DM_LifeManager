@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import type { ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 import * as fs from 'node:fs';
@@ -104,16 +105,16 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       // 每次请求通过 router 函数实时解析 engine 端口（http-proxy 原生支持）
-      '/trpc': {
+      '/trpc': ({
         target: process.env.VITE_ENGINE_URL || `http://127.0.0.1:${DEFAULT_PORT}`,
         changeOrigin: true,
         router: () => process.env.VITE_ENGINE_URL || resolveEngineUrl(),
-      },
-      '/events': {
+      } as ProxyOptions & { router?: () => string }),
+      '/events': ({
         target: process.env.VITE_ENGINE_URL || `http://127.0.0.1:${DEFAULT_PORT}`,
         changeOrigin: true,
         router: () => process.env.VITE_ENGINE_URL || resolveEngineUrl(),
-      },
+      } as ProxyOptions & { router?: () => string }),
     },
   },
 });

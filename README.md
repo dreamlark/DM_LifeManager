@@ -23,6 +23,7 @@
    - 4.7 备份与回滚
    - 4.8 数据与目录结构
    - 4.9 故障排查
+   - 4.10 fnOS 免 git 直接拉镜像（推荐家庭 NAS）
 5. [增量升级机制（版本接口 + 横幅）](#5-增量升级机制版本接口--横幅)
 6. [金额互转（预留接口状态）](#6-金额互转预留接口状态)
 7. [已知坑与注意事项](#7-已知坑与注意事项)
@@ -105,9 +106,11 @@ npm run build -w @dm-life/web-collab  # vite build 通过（PWA 静态包）
 涉及文件（均已就绪）：
 
 ```
-docker-compose.yml        # 编排：5 个服务
+docker-compose.yml        # 编排：5 个服务（本地构建，适合开发者 / git 部署）
+docker-compose.fnos.yml   # 编排：直接拉取 GHCR 预构建镜像（fnOS / 免 git 部署，见 4.10）
 Caddyfile                 # 反向代理 + 自动 TLS
 .dockerignore
+.github/workflows/publish.yml  # 推送 main 时自动构建并发布镜像到 GHCR（公开）
 packages/engine/Dockerfile
 packages/server/Dockerfile
 packages/web-collab/Dockerfile
@@ -125,15 +128,20 @@ scripts/nas/upgrade.sh     # 拉源码→备份→重建→滚动重启
 
 ### 4.2 把代码放到 NAS
 
-推荐走 git（升级时一条 `git pull` 即可）：
+有两种放法，按你喜好选：
 
+**方式一 · git 拉仓库（适合会升级、想保留源码）**
 ```bash
 # 在 NAS 的终端 / Container Manager 的终端里
 git clone <你的仓库地址> dm-life
 cd dm-life
 ```
+升级时一条 `git pull` 即可。对应 `docker-compose.yml`（`docker compose up -d --build` 本地构建）。
 
-若不方便建远程仓库，也可把 `dm-life` 整个目录用 File Station / SCP 拷进 NAS 任意持久位置（如 `/volume1/docker/dm-life`）。
+**方式二 · 免 git 直接拉镜像（推荐家庭 NAS / fnOS，见 4.10）**
+完全不碰源码：镜像已由 GitHub Actions 自动构建并发布到 GHCR（公开），你只需在 fnOS 粘贴一份 compose 即可拉取运行，详见 [4.10](#410-fnos--任意-docker-主机免-git-直接拉镜像)。对应 `docker-compose.fnos.yml`。
+
+若方式一不方便建远程仓库，也可把 `dm-life` 整个目录用 File Station / SCP 拷进 NAS 任意持久位置（如 `/volume1/docker/dm-life`）。
 **确保该目录在重启后依然存在**（不要放在 `/tmp` 之类临时卷）。
 
 ### 4.3 配置域名 / 网络（三选一）
@@ -259,6 +267,70 @@ dm-life/
 | 端口 80/443 被占 | 改 `docker-compose.yml` 里 `caddy.ports` 为 `"8080:80" "8443:443"`，Caddyfile 无需改 |
 | 证书报错 | 公网域名检查 DNS/端口转发；Tailscale/局域网改用 `tls internal` |
 | 数据疑似丢失 | 确认没误删 `./data` 目录；从 `backups/` 恢复 |
+
+---
+
+### 4.10 fnOS / 任意 Docker 主机：免 git 直接拉镜像
+
+如果你不想在 NAS 上 clone 仓库、也不想现场编译，可以用**预构建镜像**方案：本仓库已配置 GitHub Actions（`.github/workflows/publish.yml`），每次推送 `main` 都会自动把三个服务构建成 Docker 镜像并发布到 **GitHub Container Registry（GHCR）**，且自动设为**公开**。你只需在 fnOS 上拉取运行，全程不需要 git、不需要编译。
+
+镜像地址（均已公开）：
+
+```
+ghcr.io/dreamlark/dm-life-engine:latest   # 单机引擎（tRPC + sql.js）
+ghcr.io/dreamlark/dm-life-server:latest   # 协作后端（PGlite / 可选 Postgres）
+ghcr.io/dreamlark/dm-life-web:latest      # 前端静态站（Web + 移动 PWA）
+```
+
+**部署步骤（fnOS「容器」→「项目 / Compose」）**
+
+1. 在 NAS 上新建项目文件夹（如 `docker/dm-life`）。
+2. 把本仓库根目录的 **`docker-compose.fnos.yml`** 与 **`Caddyfile`** 两个文件放进该文件夹（Caddyfile 也可直接复制下方片段新建，它与仓库里的完全一致）。
+3. 编辑 `docker-compose.fnos.yml`，把 `caddy` 服务的 `DOMAIN` 改成你的实际地址（Tailscale 机器名或域名；见 4.3 三选一）。
+4. 创建项目并启动。fnOS 会按 `image:` 直接从 GHCR 拉取三个镜像，`watchtower` 每小时检查一次 `latest` 并自动滚动升级。
+
+> 只有 `Caddyfile` 这一份不到 1KB 的配置文件需要你手动放到 NAS（compose 通过 `./Caddyfile` 挂载它）。其余全是拉取的镜像，没有源码。
+
+**Caddyfile 片段（如未下载，可新建同名文件）**
+
+```Caddyfile
+{
+  email admin@<你的域名>
+}
+
+<你的域名> {
+  encode zstd gzip
+  handle_path /engine/* {
+    reverse_proxy engine:14570
+  }
+  handle /trpc* {
+    reverse_proxy server:4100
+  }
+  handle /api/* {
+    reverse_proxy server:4100
+  }
+  handle /health* /ready* {
+    reverse_proxy server:4100
+  }
+  handle /ws* {
+    reverse_proxy server:4100
+  }
+  handle {
+    reverse_proxy frontend:80
+  }
+}
+```
+
+> Tailscale / 局域网用户：在站点块首行加 `tls internal`（见 4.3 方案 B/C），并把 `<你的域名>` 换成 `my-nas.ts.net` 或改用 HTTP 端口。
+
+**升级**：镜像已公开，`watchtower` 会自动拉取 `latest` 重建；或在 fnOS 里「重新拉取 / 重建」该项目。数据卷 `./data` 不参与镜像，安全不变。
+
+**回滚到某个版本**：镜像除 `latest` 外还打了 `sha-<commit>` 标签。把 compose 里三个 `image:` 的 `:latest` 改成具体 `:sha-<commit>` 即可锁定版本，再重建项目。
+
+**若拉取报 401/403**：说明镜像包未公开。两种解决：
+- 在 GitHub 仓库 `Settings → Packages` 把三个 `dm-life-*` 包可见性改为 **Public**；或
+- 在 fnOS 的「镜像」里登录 GHCR（用户名=GitHub 账号，密码=有 `read:packages` 权限的 PAT），再拉取。
+（正常情况下工作流已自动设为公开，无需此步。）
 
 ---
 

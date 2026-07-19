@@ -14,7 +14,7 @@ COPY package.json package-lock.json ./
 COPY packages/server/package.json packages/server/package.json
 COPY packages/shared/package.json packages/shared/package.json
 
-RUN npm ci
+RUN npm ci --include=dev
 
 COPY packages ./packages
 COPY tsconfig.base.json ./tsconfig.base.json

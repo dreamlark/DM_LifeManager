@@ -16,7 +16,7 @@ COPY package.json package-lock.json ./
 COPY packages/engine/package.json packages/engine/package.json
 COPY packages/shared/package.json packages/shared/package.json
 
-RUN npm ci
+RUN npm ci --include=dev
 
 # 源码
 COPY packages ./packages

@@ -1,0 +1,79 @@
+# fnOS / 任意 Docker 主机「免 git、免编译」部署：
+# 所有镜像已预发布到 GitHub Container Registry（ghcr.io/dreamlark/*），
+# 由 .github/workflows/publish.yml 在每次推送 main 时自动构建并设为公开。
+#
+# 用法（在 fnOS「容器」→「项目 / Compose」中粘贴本文件，或下载后导入）：
+#   1. 在 NAS 上新建一个文件夹，把本文件和同目录的 Caddyfile 放进去
+#      （Caddyfile 内容与 docker-compose.yml 同目录的那份一致，可从仓库复制，
+#       或直接用 README「fnOS 免 git 部署」章节里的片段新建）。
+#   2. 把下面 caddy 服务的 DOMAIN 改成你的实际地址（Tailscale 机器名或域名）。
+#   3. 启动项目。镜像会自动从 GHCR 拉取，watchtower 每小时检查一次更新。
+#
+# 数据卷：./data/engine 与 ./data/server 各自持久化；升级/重启都不动数据。
+services:
+  engine:
+    image: ghcr.io/dreamlark/dm-life-engine:latest
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=14570
+      - HOST=0.0.0.0
+      - DM_LIFE_DATA_DIR=/data
+    volumes:
+      - ./data/engine:/data
+    expose:
+      - "14570"
+
+  server:
+    image: ghcr.io/dreamlark/dm-life-server:latest
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4100
+      - PGLITE_DIR=/data
+      - CORS_ORIGIN=*
+      # 可选：改用真实 Postgres
+      # - DATABASE_URL=postgres://user:pass@postgres:5432/dm_life
+    volumes:
+      - ./data/server:/data
+    expose:
+      - "4100"
+
+  frontend:
+    image: ghcr.io/dreamlark/dm-life-web:latest
+    pull_policy: always
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - engine
+      - server
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # 替换为你的 Tailscale / 域名；Caddy 自动申请并续期 TLS。
+      - DOMAIN=dm-life.example.ts.net
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 镜像来自 GHCR（公开），watchtower 每小时拉取 latest 并滚动重启。
+    command: --interval 3600 --cleanup
+
+volumes:
+  caddy_data:
+  caddy_config:

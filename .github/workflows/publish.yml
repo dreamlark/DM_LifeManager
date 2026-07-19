@@ -2,10 +2,16 @@ name: Publish Images to GHCR
 
 # 每次推送到 main 时，自动把三个服务构建为 Docker 镜像并推送到
 # GitHub Container Registry（ghcr.io/dreamlark/...），且自动设为公开，
-# 以便家庭 NAS（fnOS 等）无需 git、无需编译，直接拉取运行。
+# 以便家庭 NAS（fnOS 等）无需 git、无需编译，直接匿名拉取运行。
 on:
   push:
     branches: [main]
+    paths:
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '.github/workflows/publish.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -60,19 +66,23 @@ jobs:
             ghcr.io/dreamlark/dm-life-web:sha-${{ github.sha }}
 
       # 自动把三个包设为公开，使 fnOS 等可匿名拉取（无需登录 GHCR）。
-      # 包刚推送后可能短暂不可见，故带重试。
+      # 注意：GHCR 包有独立可见性，不随仓库 public 而自动公开。
+      # 包刚推送后在 API 里可能短暂不可见（GHCR 登记延迟，常见 1~3 分钟），
+      # 此时 PATCH 会 404，故轮询重试直到成功（最长约 45x10s=7.5 分钟）。
+      # 端点必须用 /user/packages/container/<name>/visibility（单数 user，表示
+      # 当前认证用户），gh 会自动用 GITHUB_TOKEN 调用 api.github.com。
+      # 不要写成 /users/<name>/...（该路由不存在，会一直 404）。
       - name: Make packages public
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           for pkg in dm-life-engine dm-life-server dm-life-web; do
-            for i in $(seq 1 12); do
-              if gh api -X PATCH "/user/packages/container/$pkg/visibility" -f visibility=public >/dev/null 2>&1; then
-                echo "ok: $pkg -> public"
-                break
+            echo ">> making $pkg public"
+            for i in $(seq 1 45); do
+              if gh api -X PATCH "user/packages/container/$pkg/visibility" -f visibility=public >/dev/null 2>&1; then
+                echo "   ok: $pkg -> public"; break
               fi
-              echo "retry $i: $pkg not yet visible, waiting..."
-              sleep 8
+              echo "   attempt $i: not ready yet, retrying in 10s"
+              sleep 10
             done
           done

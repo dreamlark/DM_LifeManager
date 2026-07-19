@@ -1,0 +1,36 @@
+name: Make GHCR packages public
+
+# 仅把已存在的 GHCR 包翻成公开，不重新构建镜像。
+# 用法：
+#   - 推送到 main（仅当本文件变动时）自动运行；
+#   - 或在 Actions 页手动 Run workflow。
+# 适用于「镜像已构建但可见性没翻成功」的补救，几十秒~几分钟即可完成。
+on:
+  push:
+    paths:
+      - '.github/workflows/make-public.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  public:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flip visibility to public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for pkg in dm-life-engine dm-life-server dm-life-web; do
+            echo ">> making $pkg public"
+            for i in $(seq 1 45); do
+              if gh api -X PATCH "user/packages/container/$pkg/visibility" -f visibility=public >/dev/null 2>&1; then
+                echo "   ok: $pkg -> public"; break
+              fi
+              echo "   attempt $i: not ready yet, retrying in 10s"
+              sleep 10
+            done
+          done
+          echo "=== done ==="

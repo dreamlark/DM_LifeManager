@@ -127,10 +127,20 @@ function normalizeValue(v: unknown): SqlValue {
   return (v as SqlValue) ?? null;
 }
 
+// 合法列名字符集（SQL 标识符白名单）：字母/下划线开头，仅含字母数字下划线。
+// 用于阻断导入 bundle 中伪造列名导致的 SQL 注入（P1-3）。
+const SAFE_COLUMN_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 function loadTable(name: string, rows: Row[]): void {
   if (!rows.length) return;
   const cols = Object.keys(rows[0]!);
   if (!cols.length) return;
+  // P1-3：任何列名不符合白名单即拒绝整批导入，杜绝 `); DROP ... --` 之类注入
+  for (const c of cols) {
+    if (!SAFE_COLUMN_RE.test(c)) {
+      throw new Error(`导入数据包含非法列名「${c}」（仅允许字母/数字/下划线，且以字母或下划线开头），已拒绝导入以防注入`);
+    }
+  }
   const placeholders = cols.map(() => '?').join(',');
   const stmt = sqlDb!.prepare(
     `INSERT INTO ${name} (${cols.join(',')}) VALUES (${placeholders})`,
@@ -298,6 +308,10 @@ export function setCustomDataDir(dir: string): { dataDir: string; restartRequire
   const clean = (dir ?? '').trim();
   if (!clean) throw new Error('数据目录不能为空');
   if (!path.isAbsolute(clean)) throw new Error('数据目录必须是绝对路径');
+  // P2-11：拒绝路径遍历（如 /data/../../etc），仅允许规范绝对路径
+  if (clean.includes('..') || clean !== path.resolve(clean)) {
+    throw new Error('数据目录包含非法路径片段（不允许 .. 或非规范路径）');
+  }
   if (clean === config.dataDir) {
     // 与当前一致：视为无操作，但仍返回成功（无需重启）
     return { dataDir: config.dataDir, restartRequired: true };

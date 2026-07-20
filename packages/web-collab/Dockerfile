@@ -35,3 +35,5 @@ FROM nginx:alpine
 COPY --from=build /app/packages/web-collab/dist /usr/share/nginx/html
 COPY packages/web-collab/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
+# N4：nginx:alpine 的 worker 进程默认以非 root 的 nginx 用户（uid 101）运行，master 仅
+# 为绑定 80 端口短暂保持 root 后降权，已是最小权限；此处不再强制 USER（否则无法绑定特权端口）。

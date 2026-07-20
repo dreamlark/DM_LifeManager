@@ -51,8 +51,7 @@ let retry = 0;
 
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const token = useAuthStore.getState().accessToken ?? '';
-  return `${proto}://${location.host}/ws?token=${encodeURIComponent(token)}`;
+  return `${proto}://${location.host}/ws`;
 }
 
 export function connectRealtime(): void {
@@ -60,7 +59,9 @@ export function connectRealtime(): void {
   if (!token) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   useRealtimeStore.getState().setStatus('connecting');
-  const sock = new WebSocket(wsUrl());
+  // P1-6：令牌经 Sec-WebSocket-Protocol 子协议头传递，不出现在 URL 中（避免被代理/访问日志记录）。
+  // 浏览器原生 WebSocket 不支持自定义请求头，子协议头是标准做法且经 vite/Caddy 代理透传。
+  const sock = new WebSocket(wsUrl(), [token]);
   ws = sock;
 
   sock.onopen = () => {

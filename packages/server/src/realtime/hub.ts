@@ -60,7 +60,10 @@ export function attachHub(server: Server): WebSocketServer {
 
   wss.on('connection', async (ws: WebSocket, req) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const token = url.searchParams.get('token');
+    // P1-6：优先从 Sec-WebSocket-Protocol 子协议头取令牌（不在 URL 中，避免被日志泄露），
+    // 兼容旧的 ?token= 查询参数。
+    const subProto = req.headers['sec-websocket-protocol'];
+    const token = (typeof subProto === 'string' && subProto.length ? subProto : url.searchParams.get('token')) ?? undefined;
     let userId: string | null = null;
     try {
       userId = token ? verifyAccess(token) : null;

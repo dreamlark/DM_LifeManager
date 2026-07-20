@@ -353,10 +353,10 @@ const debtOptionalFields = {
   rateAdjustments: z.array(z.object({ effectiveDate: z.string(), newRate: z.number() })).optional(),
   repricing: repricingSchema,
   prepayments: z
-    .array(z.object({ date: z.string(), amount: z.number().nonnegative(), type: z.enum(['reduce_term', 'reduce_payment']).optional() }))
+    .array(z.object({ date: z.string(), amount: z.number().nonnegative().max(1e15), type: z.enum(['reduce_term', 'reduce_payment']).optional() }))
     .optional(),
   parentDebtId: z.string().nullable().optional(),
-  note: z.string().optional(),
+  note: z.string().max(5000).optional(),
   apr: z.number().min(0).max(100).optional(),
   minPayment: z.number().nonnegative().optional(),
   dueDay: z.number().int().min(1).max(31).optional(),
@@ -365,7 +365,7 @@ const debtOptionalFields = {
 
 export const createDebtSchema = z.object({
   creditor: z.string().min(1).max(200),
-  principal: z.number().nonnegative(),
+  principal: z.number().nonnegative().max(1e15),
   ...debtOptionalFields,
   status: z.enum(['active', 'paid', 'frozen']).optional().default('active'),
 });
@@ -374,7 +374,7 @@ export type CreateDebtInput = z.infer<typeof createDebtSchema>;
 export const updateDebtSchema = z.object({
   id: z.string().min(1),
   creditor: z.string().min(1).max(200).optional(),
-  principal: z.number().nonnegative().optional(),
+  principal: z.number().nonnegative().max(1e15).optional(),
   ...debtOptionalFields,
 });
 export type UpdateDebtInput = z.infer<typeof updateDebtSchema>;
@@ -388,19 +388,19 @@ export type ReopenDebtInput = z.infer<typeof reopenDebtSchema>;
 export const recordIncomeSchema = z
   .object({
     source: z.string().min(1).max(200),
-    amount: z.number(),
+    amount: z.number().max(1e15),
     currency: z.string().min(1).max(8).optional().default('CNY'),
     receivedAt: z.string().min(1),
     recurring: z.boolean().optional().default(false),
     // —— 收入源模型 ——
     incomeType: z.string().max(50).optional().default('salary'),
-    monthlyAvg: z.number().optional(),
+    monthlyAvg: z.number().max(1e15).optional(),
     isFixed: z.boolean().optional().default(true),
     incomeMode: z.enum(['monthly', 'single']).optional().default('monthly'),
     payDay: z.number().int().min(1).max(31).optional(),
     adjustmentDay: z.number().int().min(1).max(31).optional(),
     rateAdjustments: z
-      .array(z.object({ effectiveDate: z.string(), newAmount: z.number().nonnegative() }))
+      .array(z.object({ effectiveDate: z.string(), newAmount: z.number().nonnegative().max(1e15) }))
       .optional(),
     note: z.string().optional().default(''),
   })
@@ -414,7 +414,7 @@ export type RecordIncomeInput = z.infer<typeof recordIncomeSchema>;
 export const recordTransactionSchema = z.object({
   kind: z.enum(['expense', 'income', 'debt_payment']),
   category: z.string().min(1).max(100),
-  amount: z.number().nonnegative(),
+  amount: z.number().nonnegative().max(1e15),
   merchant: z.string().nullable().optional(),
   occurredAt: z.string().min(1),
   debtId: z.string().nullable().optional(),
@@ -426,7 +426,7 @@ export type RecordTransactionInput = z.infer<typeof recordTransactionSchema>;
 export const recordAssetSchema = z.object({
   name: z.string().min(1).max(200),
   assetClass: z.enum(['cash', 'investment', 'property', 'other', 'fixed_asset', 'income_source']),
-  value: z.number().nonnegative(),
+  value: z.number().nonnegative().max(1e15),
   asOf: z.string().min(1),
   linkedIncomeSourceId: z.string().nullable().optional(),
 });
@@ -436,7 +436,7 @@ export const updateAssetSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1).max(200).optional(),
   assetClass: z.enum(['cash', 'investment', 'property', 'other', 'fixed_asset', 'income_source']).optional(),
-  value: z.number().nonnegative().optional(),
+  value: z.number().nonnegative().max(1e15).optional(),
   asOf: z.string().min(1).optional(),
   linkedIncomeSourceId: z.string().nullable().optional(),
 });
@@ -542,8 +542,8 @@ export const createBudgetSchema = z.object({
   name: z.string().min(1).max(200),
   scope: z.enum(['overall', 'category']).default('overall'),
   category: z.string().max(100).nullable().optional(),
-  monthlyLimit: z.number().positive('限额必须大于 0'),
-  note: z.string().max(500).optional(),
+  monthlyLimit: z.number().positive('限额必须大于 0').max(1e15),
+  note: z.string().max(5000).optional(),
 });
 export type CreateBudgetInput = z.infer<typeof createBudgetSchema>;
 
@@ -552,8 +552,8 @@ export const updateBudgetSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   scope: z.enum(['overall', 'category']).optional(),
   category: z.string().max(100).nullable().optional(),
-  monthlyLimit: z.number().positive().optional(),
-  note: z.string().max(500).optional(),
+  monthlyLimit: z.number().positive().max(1e15).optional(),
+  note: z.string().max(5000).optional(),
 });
 export type UpdateBudgetInput = z.infer<typeof updateBudgetSchema>;
 
@@ -705,15 +705,15 @@ export type DeleteAssetInput = z.infer<typeof deleteAssetSchema>;
 export const updateIncomeSchema = z.object({
   id: z.string().min(1),
   source: z.string().min(1).max(200).optional(),
-  amount: z.number().nonnegative().optional(),
+  amount: z.number().nonnegative().max(1e15).optional(),
   incomeType: z.string().max(50).optional(),
-  monthlyAvg: z.number().nonnegative().optional(),
+  monthlyAvg: z.number().nonnegative().max(1e15).optional(),
   isFixed: z.boolean().optional(),
   incomeMode: z.enum(['monthly', 'single']).optional(),
   payDay: z.number().int().min(1).max(31).optional(),
   adjustmentDay: z.number().int().min(1).max(31).optional(),
   rateAdjustments: z
-    .array(z.object({ effectiveDate: z.string(), newAmount: z.number().nonnegative() }))
+    .array(z.object({ effectiveDate: z.string(), newAmount: z.number().nonnegative().max(1e15) }))
     .optional(),
   note: z.string().optional(),
 });
@@ -722,7 +722,7 @@ export const updateTransactionSchema = z.object({
   id: z.string().min(1),
   kind: z.enum(['expense', 'income', 'debt_payment']).optional(),
   category: z.string().min(1).max(100).optional(),
-  amount: z.number().nonnegative().optional(),
+  amount: z.number().nonnegative().max(1e15).optional(),
   debtId: z.string().nullable().optional(),
   incomeSourceId: z.string().nullable().optional(),
   note: z.string().optional(),

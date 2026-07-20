@@ -33,6 +33,8 @@ export function isChild(role: Role): boolean {
 
 export interface AuthContext {
   userId: string | null;
+  /** 客户端 IP（来自 x-forwarded-for 或 socket），用于限流等，不用于鉴权判定 */
+  ip?: string;
 }
 
 export async function getMembership(ctx: AuthContext, familyId: string): Promise<Membership | undefined> {

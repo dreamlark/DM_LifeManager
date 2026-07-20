@@ -50,6 +50,51 @@ function setPinValidityMs(ms: number) {
   }
 }
 
+// —— P2-12：PIN 解锁限流（防御本地暴力枚举）——
+// 客户端锁死可被清空 localStorage 绕过，属纵深防御；目标是把「随手试 PIN」的成本抬到不划算。
+const ATTEMPT_KEY = 'dm-pin-attempts';
+const LOCK_UNTIL_KEY = 'dm-pin-lock-until';
+/** 失败后基础锁定时长（ms），按指数退避翻倍（10s → 20s → 40s …）。 */
+const PIN_LOCK_BASE_MS = 10_000;
+/** 锁定封顶时长（ms）：1 小时。 */
+const PIN_LOCK_MAX_MS = 60 * 60_000;
+
+function getFailed(): number {
+  try {
+    const n = Number(localStorage.getItem(ATTEMPT_KEY));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+function setFailed(n: number) {
+  try {
+    localStorage.setItem(ATTEMPT_KEY, String(n));
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
+function getLockUntil(): number {
+  try {
+    const n = Number(localStorage.getItem(LOCK_UNTIL_KEY));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+function setLockUntil(ts: number) {
+  try {
+    localStorage.setItem(LOCK_UNTIL_KEY, String(ts));
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
+
+/** 距离 PIN 锁死解除还有多少毫秒（0 = 未锁定，可立即尝试）。UI 用于反馈倒计时。 */
+export function pinLockRemainingMs(): number {
+  return Math.max(0, getLockUntil() - Date.now());
+}
+
 /** PIN 凭据有效期（本地“记住我”窗口）。过期后需重新输入账号密码登录。 */
 export const PIN_VALIDITY_MS = DEFAULT_VALIDITY_MS;
 
@@ -219,11 +264,22 @@ export const usePinStore = create<PinState>((set, get) => ({
   },
 
   unlock: async (pin) => {
+    // P2-12：仍处于锁死窗口内直接拒绝，避免失败计数清零前继续枚举
+    if (Date.now() < getLockUntil()) return null;
     const blob = readVault();
     if (!blob) return null;
     const creds = await decryptCreds(pin, blob);
-    if (!creds) return null;
-    // 解锁成功：用同一 PIN 重新加密并刷新过期时间，活跃使用期间保持只需 PIN
+    if (!creds) {
+      // 失败：累计错误次数，按指数退避施加锁死（10s × 2^(n-1)，封顶 1 小时）
+      const fails = getFailed() + 1;
+      setFailed(fails);
+      const lockMs = Math.min(PIN_LOCK_BASE_MS * Math.pow(2, fails - 1), PIN_LOCK_MAX_MS);
+      setLockUntil(Date.now() + lockMs);
+      return null;
+    }
+    // 解锁成功：清空失败计数与锁死，并用同一 PIN 重新加密刷新过期时间
+    setFailed(0);
+    setLockUntil(0);
     const next = await encryptCreds(pin, creds);
     localStorage.setItem(VAULT_KEY, JSON.stringify(next));
     set({ locked: false, expired: false });

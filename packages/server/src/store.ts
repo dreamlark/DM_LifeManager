@@ -175,6 +175,11 @@ export const store = {
     const db = getDb();
     await db.delete(sessions).where(eq(sessions.refreshToken, refreshToken));
   },
+  /** 吊销某用户的全部 refresh 会话（登出所有设备） */
+  async deleteSessionsByUser(userId: string): Promise<void> {
+    const db = getDb();
+    await db.delete(sessions).where(eq(sessions.userId, userId));
+  },
 
   // ===== 共享日历（家庭共享日程） =====
   async createCalendarEvent(input: {
@@ -288,9 +293,12 @@ export const store = {
     return rows.map(toSharedFinanceItem);
   },
 
-  async removeSharedFinance(id: string): Promise<void> {
+  async removeSharedFinance(id: string, familyId?: string): Promise<void> {
     const db = getDb();
-    await db.delete(sharedFinanceItems).where(eq(sharedFinanceItems.id, id));
+    // N1：必须按 familyId 过滤，否则仅凭全局 id 可越权删除其他家庭的共享财务项
+    await db
+      .delete(sharedFinanceItems)
+      .where(familyId ? and(eq(sharedFinanceItems.id, id), eq(sharedFinanceItems.familyId, familyId)) : eq(sharedFinanceItems.id, id));
   },
 
   // ===== 通用个人模块共享快照（提醒/记事/脑图/心流/领域…） =====
@@ -345,22 +353,32 @@ export const store = {
     return rows.map(toSharedItem);
   },
 
-  async removeSharedItem(id: string): Promise<void> {
+  async removeSharedItem(id: string, familyId?: string): Promise<void> {
     const db = getDb();
-    await db.delete(sharedItems).where(eq(sharedItems.id, id));
+    // N1：必须按 familyId 过滤，否则仅凭全局 id 可越权删除其他家庭的共享项
+    await db
+      .delete(sharedItems)
+      .where(familyId ? and(eq(sharedItems.id, id), eq(sharedItems.familyId, familyId)) : eq(sharedItems.id, id));
   },
 
   /** 协作操作：家庭成员标记完成 / 添加备注（仅更新 done/note；对任务模块额外同步 snapshot.status） */
-  async updateSharedItem(id: string, patch: { done?: boolean; note?: string | null }): Promise<void> {
+  async updateSharedItem(id: string, familyId: string | undefined, patch: { done?: boolean; note?: string | null }): Promise<void> {
     const db = getDb();
-    const [row] = await db.select({ module: sharedItems.module }).from(sharedItems).where(eq(sharedItems.id, id));
+    const [row] = await db
+      .select({ module: sharedItems.module })
+      .from(sharedItems)
+      .where(familyId ? and(eq(sharedItems.id, id), eq(sharedItems.familyId, familyId)) : eq(sharedItems.id, id));
+    if (!row) return; // N1：若 id 不属于该 family（跨家庭 IDOR），视为无操作，拒绝越权写入
     const set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     if (patch.done !== undefined) set.done = patch.done;
     if (patch.note !== undefined) set.note = patch.note;
-    if (patch.done !== undefined && row?.module === 'task') {
+    if (patch.done !== undefined && row.module === 'task') {
       set.snapshot = sql`jsonb_set(COALESCE(${sharedItems.snapshot}, '{}'::jsonb), '{status}', to_jsonb(${patch.done ? 'done' : 'todo'}::text))`;
     }
-    await db.update(sharedItems).set(set).where(eq(sharedItems.id, id));
+    await db
+      .update(sharedItems)
+      .set(set)
+      .where(familyId ? and(eq(sharedItems.id, id), eq(sharedItems.familyId, familyId)) : eq(sharedItems.id, id));
   },
 
   /**

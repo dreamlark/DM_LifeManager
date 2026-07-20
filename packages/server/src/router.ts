@@ -9,6 +9,9 @@ import {
   issueSession,
   rotateRefresh,
   verifyAccess,
+  getEngineToken,
+  revokeSession,
+  revokeAllSessions,
 } from './auth';
 import { requirePermission, requireMembership, type AuthContext } from './rbac';
 import { publishEvent } from './realtime/eventBus';
@@ -74,6 +77,29 @@ export const appRouter = router({
       const user = await store.getUserById(ctx.userId);
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: '用户不存在' });
       return toPublic(user);
+    }),
+
+    /** 返回引擎共享令牌（P0-2）。浏览器登录后获取，访问 engine（/engine/*）时携带。
+     *  未配置 ENGINE_API_TOKEN 时返回 null（engine 不要求令牌）。仅对已登录用户可见，
+     *  避免匿名者拿到令牌后直连 engine。 */
+    engineToken: authedProcedure.query(async () => {
+      return { engineToken: getEngineToken() };
+    }),
+
+    /** 会话吊销（P1-4）：吊销当前 refresh 会话（传 refreshToken）或该用户全部会话（不传）。
+     *  用于“退出登录 / 登出所有设备”，避免令牌在本地清除后仍可被复用。 */
+    logout: authedProcedure
+      .input(z.object({ refreshToken: z.string().min(1).optional() }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.refreshToken) await revokeSession(input.refreshToken);
+        else await revokeAllSessions(ctx.userId);
+        return { ok: true };
+      }),
+
+    /** 登出所有设备：吊销该用户的全部 refresh 会话 */
+    logoutAll: authedProcedure.mutation(async ({ ctx }) => {
+      await revokeAllSessions(ctx.userId);
+      return { ok: true };
     }),
   }),
 
@@ -339,12 +365,12 @@ export const appRouter = router({
         return row;
       }),
 
-    /** 移除一项共享财务 */
+    /** 移除一项共享财务（N1：按 familyId 过滤防跨家庭 IDOR） */
     remove: authedProcedure
       .input(z.object({ familyId: z.string().min(1), id: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
         await requirePermission(ctx, input.familyId, 'manageFinance');
-        await store.removeSharedFinance(input.id);
+        await store.removeSharedFinance(input.id, input.familyId);
         publishEvent({ kind: 'sharedFinance.updated', familyId: input.familyId, actorId: ctx.userId, module: 'finance' });
         return { ok: true };
       }),
@@ -396,7 +422,9 @@ export const appRouter = router({
         return row;
       }),
 
-    /** 协作操作：任意家庭成员可标记完成 / 添加备注（仅更新 done/note，不动快照） */
+    /** 协作操作：标记完成 / 添加备注（仅更新 done/note，不动快照）。
+     *  N1：要求 manageShared 权限（owner/admin/member），阻断 guest/child 越权写入；
+     *  同时按 familyId 过滤目标项，杜绝跨家庭 IDOR。 */
     update: authedProcedure
       .input(
         z.object({
@@ -407,11 +435,11 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        await requireMembership(ctx, input.familyId);
+        await requirePermission(ctx, input.familyId, 'manageShared');
         const patch: { done?: boolean; note?: string | null } = {};
         if (input.done !== undefined) patch.done = input.done;
         if (input.note !== undefined) patch.note = input.note;
-        await store.updateSharedItem(input.id, patch);
+        await store.updateSharedItem(input.id, input.familyId, patch);
         publishEvent({ kind: 'sharedItems.updated', familyId: input.familyId, actorId: ctx.userId });
         return { ok: true };
       }),
@@ -457,12 +485,12 @@ export const appRouter = router({
         return { ok: true };
       }),
 
-    /** 移除一项共享（任意家庭成员均可删，含他人共享的协作项） */
+    /** 移除一项共享（要求 manageShared 权限，含他人共享的协作项；N1 同时按 familyId 过滤防跨家庭 IDOR） */
     remove: authedProcedure
       .input(z.object({ familyId: z.string().min(1), id: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
-        await requireMembership(ctx, input.familyId);
-        await store.removeSharedItem(input.id);
+        await requirePermission(ctx, input.familyId, 'manageShared');
+        await store.removeSharedItem(input.id, input.familyId);
         publishEvent({ kind: 'sharedItems.updated', familyId: input.familyId, actorId: ctx.userId });
         return { ok: true };
       }),

@@ -70,6 +70,15 @@ export const config = {
   port: Number(process.env.PORT ?? 14570),
   /** 数据目录：默认放在操作系统用户数据目录（与安装目录隔离，更新程序不丢失） */
   dataDir: resolveDataDir(),
+  /**
+   * 引擎访问令牌（P0-2）。默认 null = 不启用鉴权（桌面单机 localhost 场景，保持向后兼容）。
+   * 一旦设置（NAS 多用户远程部署时务必设置），引擎会拒绝一切未携带正确令牌的
+   * tRPC / SSE / 调试端点请求，从而阻断“匿名远程导出/导入/读全部数据”。
+   * 浏览器经服务端 `auth.engineToken` 获取同一令牌后随请求携带。
+   */
+  apiToken: process.env.ENGINE_API_TOKEN && process.env.ENGINE_API_TOKEN.trim().length > 0
+    ? process.env.ENGINE_API_TOKEN.trim()
+    : null,
 };
 
 if (!Number.isFinite(config.port) || config.port <= 0) {

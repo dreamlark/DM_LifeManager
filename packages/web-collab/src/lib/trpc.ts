@@ -16,6 +16,7 @@ async function tryRefresh(): Promise<boolean> {
     try {
       const res = await trpc.auth.refresh.mutate({ refreshToken });
       useAuthStore.getState().setTokens(res.accessToken, res.refreshToken);
+      await refreshEngineToken();
       return true;
     } catch {
       useAuthStore.getState().clear();
@@ -43,6 +44,20 @@ async function authedFetch(url: string | URL | Request, init?: RequestInit): Pro
     }
   }
   return res;
+}
+
+/**
+ * 登录（或刷新成功）后，从服务端拉取引擎共享令牌并存入内存（P0-2）。
+ * 仅已登录用户能拿到该令牌，避免匿名者直连 engine。engineToken 为 null 时
+ * 表示 engine 未启用令牌（桌面单机场景），前端照常不带令牌访问。
+ */
+export async function refreshEngineToken(): Promise<void> {
+  try {
+    const { engineToken } = await trpc.auth.engineToken.query();
+    useAuthStore.getState().setEngineToken(engineToken ?? null);
+  } catch {
+    useAuthStore.getState().setEngineToken(null);
+  }
 }
 
 export const trpc = createTRPCClient<AppRouter>({

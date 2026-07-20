@@ -18,6 +18,9 @@ services:
       - PORT=14570
       - HOST=0.0.0.0
       - DM_LIFE_DATA_DIR=/data
+      # 引擎访问令牌（P0-2）：设置后 engine 拒绝一切未携带正确令牌的请求。
+      # 必须与 server 的 ENGINE_API_TOKEN 一致，且为同一强随机值。
+      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:?请在 .env 中设置 ENGINE_API_TOKEN（openssl rand -base64 48）}
     volumes:
       - ./data/engine:/data
     expose:
@@ -33,6 +36,12 @@ services:
       - PORT=4100
       - PGLITE_DIR=/data
       - CORS_ORIGIN=*
+      # 安全必填：强随机 JWT 签名密钥。缺失时 server 启动即失败（fail-closed）。
+      # 生成示例：openssl rand -base64 48
+      - JWT_SECRET=${JWT_SECRET:?请在 .env 中设置 JWT_SECRET（openssl rand -base64 48）}
+      # 引擎共享令牌（P0-2）：与 engine 服务的 ENGINE_API_TOKEN 保持一致；
+      # 设置后 engine 仅接受已登录浏览器携带的令牌，阻断匿名远程访问。
+      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:?请在 .env 中设置 ENGINE_API_TOKEN（openssl rand -base64 48）}
       # 可选：改用真实 Postgres
       # - DATABASE_URL=postgres://user:pass@postgres:5432/dm_life
     volumes:
@@ -49,7 +58,7 @@ services:
       - "80"
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.8-alpine
     restart: unless-stopped
     depends_on:
       - engine
@@ -66,13 +75,10 @@ services:
       # 替换为你的 Tailscale / 域名；Caddy 自动申请并续期 TLS。
       - DOMAIN=dm-life.example.ts.net
 
-  watchtower:
-    image: containrrr/watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    # 自动升级（仅当镜像来自可拉取的镜像仓库时生效；本地构建栈需配合镜像推送）
-    command: --interval 3600 --cleanup
+  # N2 供应链钉固：已移除 watchtower 自动拉取 latest 并滚动重启。
+  # 自动升级会每小时拉取镜像的 latest 标签并重建——若镜像源被攻破（哪怕仅内部可见），
+  # 所有部署会无声地运行恶意版本。升级改为手动：改完代码后 `docker compose build` 重建，
+  # 或拉取已钉固的不可变标签（见 docker-compose.fnos.yml 说明）后 `docker compose up -d`。
 
 volumes:
   caddy_data:

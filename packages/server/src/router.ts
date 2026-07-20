@@ -9,6 +9,9 @@ import {
   issueSession,
   rotateRefresh,
   verifyAccess,
+  getEngineToken,
+  revokeSession,
+  revokeAllSessions,
 } from './auth';
 import { requirePermission, requireMembership, type AuthContext } from './rbac';
 import { publishEvent } from './realtime/eventBus';
@@ -24,6 +27,39 @@ const isAuthed = t.middleware(({ ctx, next }) => {
 });
 const authedProcedure = publicProcedure.use(isAuthed);
 
+/* ----------------------------- P1-5 登录限流 -----------------------------
+ * 进程内滑动窗口限流，按客户端 IP 计费，用于遏制针对登录/注册/刷新接口的
+ * 暴力破解与枚举。阈值通过环境变量可配，默认偏宽松以免误伤正常多用户 NAS。
+ * 注意：这是应用层兜底；生产仍建议配合 Caddy/网关层限流。
+ */
+const RATE_CONFIG = {
+  login: { limit: Number(process.env.RATE_LOGIN_LIMIT ?? 20), windowMs: 10 * 60 * 1000 },
+  register: { limit: Number(process.env.RATE_REGISTER_LIMIT ?? 10), windowMs: 10 * 60 * 1000 },
+  refresh: { limit: Number(process.env.RATE_REFRESH_LIMIT ?? 60), windowMs: 10 * 60 * 1000 },
+};
+const rateBuckets = new Map<string, number[]>();
+export function rateLimited(bucket: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const hits = (rateBuckets.get(bucket) ?? []).filter((t) => now - t < windowMs);
+  if (hits.length >= limit) {
+    rateBuckets.set(bucket, hits);
+    return true;
+  }
+  hits.push(now);
+  rateBuckets.set(bucket, hits);
+  return false;
+}
+function rateLimitMiddleware(kind: keyof typeof RATE_CONFIG) {
+  const cfg = RATE_CONFIG[kind];
+  return t.middleware(({ ctx, next }) => {
+    const bucket = `rl:${kind}:${ctx.ip ?? 'unknown'}`;
+    if (rateLimited(bucket, cfg.limit, cfg.windowMs)) {
+      throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: '尝试过于频繁，请稍后再试' });
+    }
+    return next();
+  });
+}
+
 const emailSchema = z.string().email('邮箱格式不正确');
 const passwordSchema = z.string().min(6, '密码至少 6 位');
 const roleSchema = z.enum(['owner', 'admin', 'member', 'child', 'guest'] as const);
@@ -35,6 +71,7 @@ function toPublic(u: { id: string; email: string; name: string }): PublicUser {
 export const appRouter = router({
   auth: router({
     register: publicProcedure
+      .use(rateLimitMiddleware('register'))
       .input(z.object({ email: emailSchema, name: z.string().min(1, '请填写昵称'), password: passwordSchema, rememberMe: z.boolean().optional().default(true) }))
       .mutation(async ({ input }) => {
         if (await store.getUserByEmail(input.email)) {
@@ -50,6 +87,7 @@ export const appRouter = router({
       }),
 
     login: publicProcedure
+      .use(rateLimitMiddleware('login'))
       .input(z.object({ email: emailSchema, password: z.string().min(1), rememberMe: z.boolean().optional().default(true) }))
       .mutation(async ({ input }) => {
         const user = await store.getUserByEmail(input.email);
@@ -61,6 +99,7 @@ export const appRouter = router({
       }),
 
     refresh: publicProcedure
+      .use(rateLimitMiddleware('refresh'))
       .input(z.object({ refreshToken: z.string().min(1) }))
       .mutation(async ({ input }) => {
         try {
@@ -74,6 +113,29 @@ export const appRouter = router({
       const user = await store.getUserById(ctx.userId);
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: '用户不存在' });
       return toPublic(user);
+    }),
+
+    /** 返回引擎共享令牌（P0-2）。浏览器登录后获取，访问 engine（/engine/*）时携带。
+     *  未配置 ENGINE_API_TOKEN 时返回 null（engine 不要求令牌）。仅对已登录用户可见，
+     *  避免匿名者拿到令牌后直连 engine。 */
+    engineToken: authedProcedure.query(async () => {
+      return { engineToken: getEngineToken() };
+    }),
+
+    /** 会话吊销（P1-4）：吊销当前 refresh 会话（传 refreshToken）或该用户全部会话（不传）。
+     *  用于“退出登录 / 登出所有设备”，避免令牌在本地清除后仍可被复用。 */
+    logout: authedProcedure
+      .input(z.object({ refreshToken: z.string().min(1).optional() }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.refreshToken) await revokeSession(input.refreshToken);
+        else await revokeAllSessions(ctx.userId);
+        return { ok: true };
+      }),
+
+    /** 登出所有设备：吊销该用户的全部 refresh 会话 */
+    logoutAll: authedProcedure.mutation(async ({ ctx }) => {
+      await revokeAllSessions(ctx.userId);
+      return { ok: true };
     }),
   }),
 
@@ -339,12 +401,12 @@ export const appRouter = router({
         return row;
       }),
 
-    /** 移除一项共享财务 */
+    /** 移除一项共享财务（N1：按 familyId 过滤防跨家庭 IDOR） */
     remove: authedProcedure
       .input(z.object({ familyId: z.string().min(1), id: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
         await requirePermission(ctx, input.familyId, 'manageFinance');
-        await store.removeSharedFinance(input.id);
+        await store.removeSharedFinance(input.id, input.familyId);
         publishEvent({ kind: 'sharedFinance.updated', familyId: input.familyId, actorId: ctx.userId, module: 'finance' });
         return { ok: true };
       }),
@@ -396,7 +458,9 @@ export const appRouter = router({
         return row;
       }),
 
-    /** 协作操作：任意家庭成员可标记完成 / 添加备注（仅更新 done/note，不动快照） */
+    /** 协作操作：标记完成 / 添加备注（仅更新 done/note，不动快照）。
+     *  N1：要求 manageShared 权限（owner/admin/member），阻断 guest/child 越权写入；
+     *  同时按 familyId 过滤目标项，杜绝跨家庭 IDOR。 */
     update: authedProcedure
       .input(
         z.object({
@@ -407,11 +471,11 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        await requireMembership(ctx, input.familyId);
+        await requirePermission(ctx, input.familyId, 'manageShared');
         const patch: { done?: boolean; note?: string | null } = {};
         if (input.done !== undefined) patch.done = input.done;
         if (input.note !== undefined) patch.note = input.note;
-        await store.updateSharedItem(input.id, patch);
+        await store.updateSharedItem(input.id, input.familyId, patch);
         publishEvent({ kind: 'sharedItems.updated', familyId: input.familyId, actorId: ctx.userId });
         return { ok: true };
       }),
@@ -457,12 +521,12 @@ export const appRouter = router({
         return { ok: true };
       }),
 
-    /** 移除一项共享（任意家庭成员均可删，含他人共享的协作项） */
+    /** 移除一项共享（要求 manageShared 权限，含他人共享的协作项；N1 同时按 familyId 过滤防跨家庭 IDOR） */
     remove: authedProcedure
       .input(z.object({ familyId: z.string().min(1), id: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
-        await requireMembership(ctx, input.familyId);
-        await store.removeSharedItem(input.id);
+        await requirePermission(ctx, input.familyId, 'manageShared');
+        await store.removeSharedItem(input.id, input.familyId);
         publishEvent({ kind: 'sharedItems.updated', familyId: input.familyId, actorId: ctx.userId });
         return { ok: true };
       }),
@@ -470,13 +534,13 @@ export const appRouter = router({
 });
 
 // 供真实 HTTP 层解析 Authorization: Bearer <accessToken> 使用
-export function ctxFromAuthorization(header: string | undefined): AuthContext {
-  if (!header) return { userId: null };
+export function ctxFromAuthorization(header: string | undefined, ip?: string): AuthContext {
+  if (!header) return { userId: null, ip };
   const token = header.startsWith('Bearer ') ? header.slice(7) : header;
   try {
-    return { userId: verifyAccess(token) };
+    return { userId: verifyAccess(token), ip };
   } catch {
-    return { userId: null };
+    return { userId: null, ip };
   }
 }
 

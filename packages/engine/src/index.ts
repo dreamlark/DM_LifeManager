@@ -25,7 +25,25 @@ saveDb();
 const server = http.createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0] ?? '/';
 
+  // P0-2：引擎访问令牌校验。仅在设置了 ENGINE_API_TOKEN 时启用（fail-closed）。
+  // 令牌可从 `Authorization: Bearer <token>` 或查询参数 `?token=<token>` 携带。
+  function tokenAccepted(): boolean {
+    if (!config.apiToken) return true; // 未启用鉴权（桌面单机 localhost）
+    const auth = req.headers['authorization'];
+    if (auth && auth.startsWith('Bearer ')) return auth.slice(7).trim() === config.apiToken;
+    const q = new URL(req.url ?? '', 'http://localhost').searchParams.get('token');
+    return q === config.apiToken;
+  }
+
+  // 调试端点 /_routes 仅开发环境暴露，生产环境禁止（避免泄露全部 procedure 路径）。
+  const routesAllowed = process.env.NODE_ENV !== 'production';
+
   if (req.method === 'GET' && url === '/events') {
+    if (!tokenAccepted()) {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
     attachSse(req, res);
     return;
   }
@@ -34,7 +52,18 @@ const server = http.createServer((req, res) => {
   // 用于排查"前端报 No procedure found 但源码里明明有"——通常意味着
   // 跑的 engine 进程加载的是早前代码快照（孤儿进程/未重启）。
   // 浏览器访问 http://127.0.0.1:<port>/_routes 即可看到完整路径列表。
+  // 生产环境关闭（routesAllowed=false），且启用令牌时同样需鉴权。
   if (req.method === 'GET' && url === '/_routes') {
+    if (!routesAllowed) {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+    if (!tokenAccepted()) {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
     const procs = (appRouter as any)._def.procedures as Record<string, unknown>;
     const paths = Object.keys(procs).sort();
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -54,6 +83,11 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.startsWith('/trpc')) {
+    if (!tokenAccepted()) {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
     void (async () => {
       try {
         const webReq = incomingMessageToRequest(req, res, { maxBodySize: null });

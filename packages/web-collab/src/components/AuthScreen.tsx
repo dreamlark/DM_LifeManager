@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { trpc } from '../lib/trpc';
+import { trpc, refreshEngineToken } from '../lib/trpc';
 import { useAuthStore } from '../store/authStore';
 import { usePinStore } from '../store/pinStore';
 import { FloatingIcon } from './FloatingIcon';
@@ -34,6 +34,7 @@ export function AuthScreen({ onAuthed }: { onAuthed: () => void }) {
         setTokens(r.accessToken, r.refreshToken);
         setUser(r.user);
       }
+      await refreshEngineToken();
       // 首次登录（无 PIN 库）或凭据过期（库存在但超期）→ 引导设置/重设 PIN。
       // 凭据经 PIN 加密保存在本机，有效期内重启只需输 PIN；过期则再次回到本登录页。
       if (!hasPin || expired) openSetup({ email, password }, hasPin);

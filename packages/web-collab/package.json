@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@dm-life/engine": "1.0.0",
-    "@dm-life/server": "1.0.0",
+    "@dm-life/server": "0.1.0",
     "@dm-life/shared": "1.0.0",
     "@dnd-kit/core": "^6.1.0",
     "@dnd-kit/utilities": "^3.2.2",

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { httpBatchLink } from '@trpc/client';
 import { trpcLocal, queryClientLocal } from './lib/trpcLocal';
+import { useAuthStore } from './store/authStore';
 import App from './App';
 import { BackendGate } from './components/BackendGate';
 import './tailwind.css';
@@ -24,8 +25,15 @@ const trpcFetch: typeof fetch = (input, init) => {
   return fetch(input, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 };
 
+// P0-2：若 engine 启用了访问令牌（登录后由服务端下发），请求时携带 Bearer，
+// 否则（桌面单机 / 未配置）返回空对象，不携带任何凭证。令牌仅在已登录时存在，匿名者拿不到。
+function engineHeaders(): Record<string, string> {
+  const token = useAuthStore.getState().engineToken;
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 const trpcLocalClient = trpcLocal.createClient({
-  links: [httpBatchLink({ url: '/engine/trpc', fetch: trpcFetch })],
+  links: [httpBatchLink({ url: '/engine/trpc', fetch: trpcFetch, headers: engineHeaders })],
 });
 
 createRoot(document.getElementById('root')!).render(

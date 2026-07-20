@@ -1,39 +1,58 @@
 # fnOS / 任意 Docker 主机「免 git、免编译」部署：
 # 所有镜像已预发布到 GitHub Container Registry（ghcr.io/dreamlark/*），
-# 由 .github/workflows/publish.yml 在每次推送 main 时自动构建并设为公开。
+# 由 .github/workflows/publish.yml 在每次推送 main 时自动构建，标签含不可变的
+# `:sha-<commit>`（如 dm-life-engine:sha-0a57b84）以及 :latest。
+#
+# ⚠️ N2 供应链钉固（务必遵守）：
+#   1. 镜像包默认**私有**（不要翻成 Public）。私有包即使被内部人员误推，外部也无法匿名拉取。
+#   2. 下方 image 必须钉固到不可变标签 `:sha-<你实际部署的 commit>` 或摘要
+#      `ghcr.io/dreamlark/dm-life-engine@sha256:<digest>`，**禁止使用 :latest**——
+#      :latest 可被覆盖，watchtower 每小时拉取后会无声运行被篡改的版本。
+#   3. 已移除 watchtower 自动拉取 latest 并滚动重启（自动升级是供应链投毒的高危入口）。
+#      升级方式：改代码后重新 `publish.yml` 推镜像 → 改本文件里的 sha 标签 →
+#      `docker compose up -d`。或用 scripts/nas/upgrade.sh（增量、不动 ./data）。
+#   4. JWT_SECRET 与 ENGINE_API_TOKEN 必须设置为强随机值（openssl rand -base64 48），
+#      缺失时服务启动即失败（fail-closed），切勿留空或提交到仓库。
 #
 # 用法（在 fnOS「容器」→「项目 / Compose」中粘贴本文件，或下载后导入）：
-#   1. 在 NAS 上新建一个文件夹，把本文件和同目录的 Caddyfile 放进去
-#      （Caddyfile 内容与 docker-compose.yml 同目录的那份一致，可从仓库复制，
-#       或直接用 README「fnOS 免 git 部署」章节里的片段新建）。
-#   2. 把下面 caddy 服务的 DOMAIN 改成你的实际地址（Tailscale 机器名或域名）。
-#   3. 启动项目。镜像会自动从 GHCR 拉取，watchtower 每小时检查一次更新。
-#
-# 数据卷：./data/engine 与 ./data/server 各自持久化；升级/重启都不动数据。
+#   1. 把本文件和同目录的 Caddyfile 放到一个文件夹（Caddyfile 内容与仓库根一致）。
+#   2. 在该文件夹新建 .env 文件，写入：
+#        JWT_SECRET=<openssl rand -base64 48 的输出>
+#        ENGINE_API_TOKEN=<openssl rand -base64 48 的输出，需与下方一致>
+#        DOMAIN=你的 Tailscale 机器名或域名
+#      并将下方 engine/server 的 image 标签替换为实际发布的 `:sha-<commit>`。
+#   3. 启动项目。镜像是私有仓库时需先 `docker login ghcr.io`（用带 read:packages 的 PAT）。
 services:
   engine:
-    image: ghcr.io/dreamlark/dm-life-engine:latest
-    pull_policy: always
+    # 替换为实际发布的不可变标签，例如 ghcr.io/dreamlark/dm-life-engine:sha-0a57b84
+    # 或钉固到摘要：ghcr.io/dreamlark/dm-life-engine@sha256:<digest>
+    image: ghcr.io/dreamlark/dm-life-engine:sha-REPLACE_ME
     restart: unless-stopped
     environment:
       - NODE_ENV=production
       - PORT=14570
       - HOST=0.0.0.0
       - DM_LIFE_DATA_DIR=/data
+      # 引擎访问令牌（P0-2）：设置后 engine 拒绝未携带正确令牌的请求。
+      # 必须与 server 的 ENGINE_API_TOKEN 为同一强随机值。
+      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:?请在 .env 中设置 ENGINE_API_TOKEN}
     volumes:
       - ./data/engine:/data
     expose:
       - "14570"
 
   server:
-    image: ghcr.io/dreamlark/dm-life-server:latest
-    pull_policy: always
+    image: ghcr.io/dreamlark/dm-life-server:sha-REPLACE_ME
     restart: unless-stopped
     environment:
       - NODE_ENV=production
       - PORT=4100
       - PGLITE_DIR=/data
       - CORS_ORIGIN=*
+      # 安全必填：强随机 JWT 签名密钥，缺失时 server 启动即失败。
+      - JWT_SECRET=${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      # 与 engine 的 ENGINE_API_TOKEN 一致。
+      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:?请在 .env 中设置 ENGINE_API_TOKEN}
       # 可选：改用真实 Postgres
       # - DATABASE_URL=postgres://user:pass@postgres:5432/dm_life
     volumes:
@@ -42,14 +61,13 @@ services:
       - "4100"
 
   frontend:
-    image: ghcr.io/dreamlark/dm-life-web:latest
-    pull_policy: always
+    image: ghcr.io/dreamlark/dm-life-web:sha-REPLACE_ME
     restart: unless-stopped
     expose:
       - "80"
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.8-alpine
     restart: unless-stopped
     depends_on:
       - engine
@@ -66,13 +84,7 @@ services:
       # 替换为你的 Tailscale / 域名；Caddy 自动申请并续期 TLS。
       - DOMAIN=dm-life.example.ts.net
 
-  watchtower:
-    image: containrrr/watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    # 镜像来自 GHCR（公开），watchtower 每小时拉取 latest 并滚动重启。
-    command: --interval 3600 --cleanup
+  # N2：已移除 watchtower 自动拉取 latest（供应链投毒高危入口）。升级改为手动钉固标签。
 
 volumes:
   caddy_data:

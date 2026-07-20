@@ -4,6 +4,7 @@ import { beforeEach, afterAll, describe, expect, it } from 'vitest';
 import { appRouter } from '../router';
 import { initDb, closeDb } from '../db';
 import { store } from '../store';
+import { signAccess, verifyAccess } from '../auth';
 import type { AuthContext } from '../rbac';
 
 const anon = () => appRouter.createCaller({ userId: null } as AuthContext);
@@ -83,6 +84,17 @@ describe('M2.1 鉴权 + 家庭 + RBAC', () => {
     const alice = await anon().auth.register({ email: 'a6@home.dev', name: 'Alice', password: 'secret1' });
     const family = await asUser(alice.user.id).families.create({ name: '杨家' });
     await expect(asUser(alice.user.id).families.leave({ familyId: family.id })).rejects.toThrow(/不能直接离开|转让|解散/);
+  });
+
+  it('JWT 防伪（P0-1）：篡改签名的令牌被拒，合法令牌可解析', async () => {
+    const token = signAccess('user-1');
+    expect(verifyAccess(token)).toBe('user-1');
+    const parts = token.split('.');
+    expect(parts).toHaveLength(3);
+    // 改签名段 → 验签失败
+    expect(() => verifyAccess(`${parts[0]}.${parts[1]}.forged-signature`)).toThrow();
+    // 完全非法
+    expect(() => verifyAccess('not-a-jwt')).toThrow();
   });
 
   it('rememberMe 控制 refresh 有效期：false≈1天，true≈30天', async () => {

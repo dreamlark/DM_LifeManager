@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { trpcLocal } from './trpcLocal';
+import { useAuthStore } from '../store/authStore';
 
 /**
  * 订阅本地 engine 的 SSE 事件流（/engine/events）：任意写事件到来即让相关查询失效并重新拉取，
@@ -9,7 +10,11 @@ export function useEventStreamLocal(): void {
   const utils = trpcLocal.useUtils();
 
   useEffect(() => {
-    const es = new EventSource('/engine/events');
+    // P0-2：EventSource 无法自定义请求头，故令牌经 ?token= 传递（后端按查询参数校验）。
+    // engine 未启用令牌时 token 为 null，则不附加任何凭证。
+    const token = useAuthStore.getState().engineToken;
+    const url = token ? `/engine/events?token=${encodeURIComponent(token)}` : '/engine/events';
+    const es = new EventSource(url);
 
     es.onmessage = () => {
       void utils.tasks.today.invalidate();

@@ -8,6 +8,10 @@
 
   # 本地引擎（个人模式 / SSE / 就绪探测）：剥离 /engine 前缀后再转发，
   # 使 engine 收到原生 /trpc / /events / /_routes。
+  # 安全（P0-2）：engine 启用 ENGINE_API_TOKEN 后，仅接受携带正确令牌的请求；
+  # 浏览器经已登录会话从 server 获取该令牌并随请求携带，匿名者无法访问。
+  # 防御纵深：若仅家庭内网使用，可在此块加 `basicauth` 或限制来源 IP；
+  # 切勿在未设 ENGINE_API_TOKEN 时把 /engine 暴露到公网。
   handle_path /engine/* {
     reverse_proxy engine:14570
   }

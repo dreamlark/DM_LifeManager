@@ -3,5 +3,5 @@ export { appRouter, ctxFromAuthorization } from './router';
 export type { AppRouter } from './router';
 export { store } from './store';
 export * from './rbac';
-export { hashPassword, verifyPassword, signAccess, verifyAccess, issueSession, rotateRefresh } from './auth';
+export { hashPassword, verifyPassword, signAccess, verifyAccess, issueSession, rotateRefresh, getEngineToken, ENGINE_API_TOKEN } from './auth';
 export * from './types';

@@ -200,4 +200,48 @@ describe('#209 通用 sharedItems 服务端', () => {
     list = await asUser(alice.user.id).sharedItems.listByFamily({ familyId, module: 'task' });
     expect(list).toHaveLength(1);
   });
+
+  it('guest 无 manageShared → update/remove 共享项被 FORBIDDEN（N1：阻断 guest 越权写入）', async () => {
+    const alice = await register('Alice');
+    const guest = await register('Guest');
+    const fam = await asUser(alice.user.id).families.list();
+    const familyId = fam[0]!.id;
+    const inv = await asUser(alice.user.id).families.invite({ familyId, role: 'guest' });
+    await asUser(guest.user.id).families.acceptInvite({ token: inv.token });
+
+    const item = await asUser(alice.user.id).sharedItems.upsert({
+      familyId, module: 'task', itemType: 'task', itemKey: 't1', label: 'x', scope: 'all', allowedUserIds: [], snapshot: { title: 't' },
+    });
+    // guest 仅 viewShared，无 manageShared → update / remove 均须 FORBIDDEN
+    await expect(
+      asUser(guest.user.id).sharedItems.update({ familyId, id: item.id, done: true }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      asUser(guest.user.id).sharedItems.remove({ familyId, id: item.id }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('跨家庭 IDOR：用自家 family 权限操作他人 family 的共享项应无效（N1）', async () => {
+    const alice = await register('Alice');
+    const famA = await asUser(alice.user.id).families.list();
+    const familyA = famA[0]!.id;
+    const item = await asUser(alice.user.id).sharedItems.upsert({
+      familyId: familyA, module: 'task', itemType: 'task', itemKey: 't1', label: 'x', scope: 'all', allowedUserIds: [], snapshot: { title: 't' },
+    });
+
+    // bob 是另一个无关家庭的 owner（拥有 manageShared），但 item 属于 alice 的 familyA
+    const bob = await register('Bob');
+    const famB = await asUser(bob.user.id).families.list();
+    const familyB = famB[0]!.id;
+
+    // remove：权限通过（bob 是 familyB 的 owner），但因 familyId 过滤，跨家庭项不会被删
+    await asUser(bob.user.id).sharedItems.remove({ familyId: familyB, id: item.id });
+    let aliceList = await asUser(alice.user.id).sharedItems.listByFamily({ familyId: familyA });
+    expect(aliceList.find((x) => x.id === item.id)).toBeTruthy();
+
+    // update：同理，跨家庭项不会被篡改
+    await asUser(bob.user.id).sharedItems.update({ familyId: familyB, id: item.id, done: true });
+    aliceList = await asUser(alice.user.id).sharedItems.listByFamily({ familyId: familyA });
+    expect(aliceList.find((x) => x.id === item.id)!.done).toBe(false);
+  });
 });

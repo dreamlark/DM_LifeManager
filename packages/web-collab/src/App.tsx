@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { trpc } from './lib/trpc';
+import { trpc, refreshEngineToken } from './lib/trpc';
 import { connectRealtime, disconnectRealtime } from './lib/realtime';
 import { useAuthStore } from './store/authStore';
 import { useFamilyStore } from './store/familyStore';
@@ -87,6 +87,7 @@ export default function App() {
       }
       const me = await trpc.auth.me.query();
       setUser(me);
+      await refreshEngineToken();
       const list = await trpc.families.list.query();
       setFamilies(list);
       setView('board');
@@ -167,6 +168,7 @@ export default function App() {
           const r = await trpc.auth.login.mutate({ email: creds.email, password: creds.password });
           setTokens(r.accessToken, r.refreshToken);
           setUser(r.user);
+          await refreshEngineToken();
           await onAuthed();
         } catch {
           /* 自动登录失败：放行进入个人功能，家庭协作登录在点击协作入口时进行 */
@@ -188,8 +190,14 @@ export default function App() {
     }
   }, [clearAuth, resetFamily, setFamilyOpen, setView]);
 
-  function logout() {
+  async function logout() {
     disconnectRealtime();
+    // P1-4：服务端吊销当前 refresh 会话，避免令牌在本地被清后仍可被复用
+    try {
+      await trpc.auth.logout.mutate({ refreshToken: useAuthStore.getState().refreshToken ?? undefined });
+    } catch {
+      /* 吊销失败不阻塞登出（本地清理仍进行） */
+    }
     clearAuth();
     resetFamily();
     setFamilyOpen(false);

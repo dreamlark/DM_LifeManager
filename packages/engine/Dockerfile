@@ -40,5 +40,11 @@ COPY apps ./apps
 VOLUME ["/data"]
 EXPOSE 14570
 
+# N4：以非 root 的 node 用户运行，降低容器逃逸后的影响面（node:22-slim 已内置 node 用户）。
+# 注意：/data 由 compose 挂载宿主机卷，运行时该目录归属由宿主机决定；请保证挂载目录对
+# node 用户（uid 1000）可写，或在部署侧用 chown 修正，否则引擎落盘会报权限错误。
+RUN chown -R node:node /app && mkdir -p /data && chown -R node:node /data
+USER node
+
 # 经 npm workspaces 启动 tsx（tsx 在 devDependencies）
 CMD ["npm", "start", "-w", "packages/engine"]

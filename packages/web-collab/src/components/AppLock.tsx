@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePinStore, type PinCreds } from '../store/pinStore';
+import { usePinStore, pinLockRemainingMs, type PinCreds } from '../store/pinStore';
 import { FloatingIcon } from './FloatingIcon';
 
 interface AppLockProps {
@@ -81,8 +81,24 @@ export function AppLock({ children, onUnlock, onForgotPin }: AppLockProps) {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lockRemaining, setLockRemaining] = useState(0);
 
   const idleTimer = useRef<number | null>(null);
+
+  // P2-12：PIN 锁死期间轮询剩余时间，驱动倒计时文案与输入禁用
+  useEffect(() => {
+    if (!locked || setupOpen) return;
+    let timer: number | undefined;
+    const tick = () => {
+      const rem = pinLockRemainingMs();
+      setLockRemaining(rem);
+      if (rem > 0) timer = window.setTimeout(tick, 500);
+    };
+    tick();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [locked, setupOpen]);
 
   // 空闲自动锁：解锁且已设 PIN 时，超时无操作则锁定
   useEffect(() => {
@@ -101,6 +117,12 @@ export function AppLock({ children, onUnlock, onForgotPin }: AppLockProps) {
   }, [locked, hasPin, lockDurationMin]);
 
   const doUnlock = useCallback(async () => {
+    const rem = pinLockRemainingMs();
+    if (rem > 0) {
+      setLockRemaining(rem);
+      setError(`尝试过于频繁，请 ${Math.ceil(rem / 1000)} 秒后重试`);
+      return;
+    }
     if (pin.length !== 4) {
       setError('请输入 4 位 PIN');
       return;
@@ -110,7 +132,9 @@ export function AppLock({ children, onUnlock, onForgotPin }: AppLockProps) {
     const creds = await unlock(pin);
     if (!creds) {
       setBusy(false);
-      setError('PIN 错误，请重试');
+      const rem2 = pinLockRemainingMs();
+      setLockRemaining(rem2);
+      setError(rem2 > 0 ? `PIN 错误，请 ${Math.ceil(rem2 / 1000)} 秒后重试` : 'PIN 错误，请重试');
       setPin('');
       return;
     }
@@ -127,10 +151,10 @@ export function AppLock({ children, onUnlock, onForgotPin }: AppLockProps) {
 
   // 输入满 4 位后自动解锁，无需点击确认按钮
   useEffect(() => {
-    if (pin.length === 4 && !busy && !setupOpen && locked) {
+    if (pin.length === 4 && !busy && !setupOpen && locked && lockRemaining === 0) {
       void doUnlock();
     }
-  }, [pin, busy, setupOpen, locked, doUnlock]);
+  }, [pin, busy, setupOpen, locked, lockRemaining, doUnlock]);
 
   const doSetup = useCallback(async () => {
     if (pin.length !== 4) {
@@ -188,9 +212,14 @@ export function AppLock({ children, onUnlock, onForgotPin }: AppLockProps) {
           value={pin}
           onChange={(v) => { setPin(v); setError(null); }}
           autoFocus
-          disabled={busy}
+          disabled={busy || lockRemaining > 0}
         />
         {error && <div className="form-error">{error}</div>}
+        {lockRemaining > 0 && (
+          <div className="form-error" aria-live="polite">
+            PIN 已锁定，约 {Math.ceil(lockRemaining / 1000)} 秒后重试
+          </div>
+        )}
         <button className="btn-ghost sm" type="button" onClick={onForgotPin}>
           忘记 PIN？
         </button>

@@ -10,12 +10,21 @@ import { appRouter, ctxFromAuthorization } from './router';
 import { attachHub } from './realtime/hub';
 import { initDb, closeDb } from './db';
 import { getVersionInfo, SCHEMA_VERSION } from './version';
+import { sanitizeError } from './log-sanitize';
 
 const PORT = Number(process.env.PORT || 4100);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 const ENDPOINT = '/trpc';
 
 let dbReady = false;
+
+/** 从请求解析客户端 IP（优先 x-forwarded-for，其次 socket 直连），用于限流等 */
+function clientIp(req: import('node:http').IncomingMessage): string | undefined {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0]!.trim();
+  if (Array.isArray(fwd) && fwd.length) return fwd[0]!.trim();
+  return req.socket?.remoteAddress;
+}
 
 function setCors(res: import('node:http').ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
@@ -81,14 +90,17 @@ async function main() {
             endpoint: ENDPOINT,
             req: webReq,
             router: appRouter,
-            createContext: ({ req: r }) => ctxFromAuthorization(r.headers.get('authorization') ?? undefined),
+            // 注意：此处 r 是 fetch 适配层包装后的 web Request，无 socket、headers 也非
+            // 普通对象，不能直接取客户端 IP。必须用外层 Node IncomingMessage(req) 取 IP，
+            // 否则 clientIp 恒为 undefined → 限流退化为全局共享 bucket（ip=unknown），失效。
+            createContext: ({ req: r }) => ctxFromAuthorization(r.headers.get('authorization') ?? undefined, clientIp(req)),
           });
           res.statusCode = response.status;
           response.headers.forEach((v, k) => res.setHeader(k, v));
           const buf = Buffer.from(await response.arrayBuffer());
           res.end(buf);
         } catch (e) {
-          console.error('[tRPC] handler error', e);
+          console.error('[tRPC] handler error', sanitizeError(e));
           if (!res.headersSent) res.writeHead(500);
           res.end('内部错误');
         }
@@ -113,7 +125,7 @@ async function main() {
     dbReady = true;
     console.log('✅ 数据库初始化完成，协作服务已就绪');
   } catch (err) {
-    console.error('数据库初始化失败', err);
+    console.error('数据库初始化失败', sanitizeError(err));
     // 保持监听，但业务请求继续 503，便于通过 /health 与日志排查
   }
 
@@ -128,6 +140,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('启动失败', err);
+  console.error('启动失败', sanitizeError(err));
   process.exit(1);
 });

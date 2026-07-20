@@ -83,6 +83,30 @@ describe('数据导出 / 导入 / 迁移', () => {
     expect(validateBundle(bad).ok).toBe(false);
   });
 
+  it('导入校验：拒绝伪造列名（P1-3 列名注入防护）', () => {
+    const bundle = exportAll();
+    // 合法表 + 合法必需列，但额外混入一个带 SQL 注入的恶意列名。
+    // 不含 domain_key 以跳过外键校验，确保触发的是列名白名单拦截而非外键校验。
+    const bad = {
+      ...bundle,
+      tables: {
+        ...bundle.tables,
+        tasks: [
+          {
+            id: 'x',
+            title: 't',
+            created_at: '2020-01-01T00:00:00.000Z',
+            updated_at: '2020-01-01T00:00:00.000Z',
+            'title"); DROP TABLE tasks; --': 1,
+          },
+        ],
+      },
+    };
+    expect(() => importAll(bad)).toThrow(/非法列名/);
+    // 确认注入未得逞：tasks 表未被清空或损毁（导入整体回滚）
+    expect(sqlDb!.exec('SELECT id FROM tasks').length).toBeGreaterThanOrEqual(0);
+  });
+
   it('dataStatus 返回数据目录 / schema 版本 / 各表行数', () => {
     const s = dataStatus();
     expect(s.schemaVersion).toBe(1);

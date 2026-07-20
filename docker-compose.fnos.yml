@@ -1,16 +1,16 @@
 # fnOS / Docker host 部署 —— 基于最新代码 (security/quality hardening, commit 589136f)
 #
 # 镜像：ghcr.io/dreamlark/dm-life-{engine,server,web}
-#   - 已钉固到不可变标签 :sha-589136f（供应链安全 N2 要求，禁止用 :latest）。
-#   - 589136f 是最新一次成功构建的提交；若之后又有新提交，请在 GitHub
-#     Packages 里查对应 :sha-<commit> 再替换下面三处 image 标签。
-#   - 镜像默认【私有】：首次需 `docker login ghcr.io`（用户名=GitHub 登录名，
-#     密码=PAT，作用域必须勾 read:packages；旧的 repo/workflow 类 PAT 拉不了包）。
-#     或把三个包在 GitHub 网页手动设为 Public（一次性）。
+#   - 使用 :latest 标签（与早期便捷部署一致）；GitHub Actions 每次 push 都会
+#     重建并推送 :latest，fnOS 部署/重启时 pull_policy: always 自动拉最新。
+#   - 镜像默认【私有】：要让 fnOS 免登录直接拉，需把三个包在 GitHub 网页
+#     设为 Public（一次性，用 dreamlark 账号；协作者 PAT 无 packages 权限翻不了）。
+#     设为 Public 后，本 compose 无需 docker login 即可拉取。
 #
 # 用法（fnOS 容器 → 项目/Compose 粘贴本文件）：
 #   1. 同目录准备 caddy.conf（见交付的 caddy.conf）和 .env（见 .env.example）。
-#   2. 在 NAS 终端先 `docker login ghcr.io`。
+#   2. 若三个 GHCR 包未设为 Public，需先在 NAS 终端 `docker login ghcr.io`；
+#      已设为 Public 则可跳过登录，直接拉取。
 #   3. 启动项目。
 # 访问：http://<NAS 局域网IP 或 Tailscale IP>:8080
 #   （Tailscale 的 WireGuard 已端到端加密，HTTP 在传输层等同安全；
@@ -24,8 +24,9 @@
 
 services:
   engine:
-    image: ghcr.io/dreamlark/dm-life-engine:sha-589136f
+    image: ghcr.io/dreamlark/dm-life-engine:latest
     restart: unless-stopped
+    pull_policy: always
     environment:
       - NODE_ENV=production
       - PORT=14570
@@ -39,8 +40,9 @@ services:
       - "14570"
 
   server:
-    image: ghcr.io/dreamlark/dm-life-server:sha-589136f
+    image: ghcr.io/dreamlark/dm-life-server:latest
     restart: unless-stopped
+    pull_policy: always
     environment:
       - NODE_ENV=production
       - PORT=4100
@@ -56,7 +58,7 @@ services:
       - "4100"
 
   frontend:
-    image: ghcr.io/dreamlark/dm-life-web:sha-589136f
+    image: ghcr.io/dreamlark/dm-life-web:latest
     restart: unless-stopped
     expose:
       - "80"

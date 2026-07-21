@@ -25,7 +25,9 @@ export function BackendGate({ children }: { children: ReactNode }) {
 
     const checkEngine = async () => {
       try {
-        const res = await fetch('/engine/_routes', { cache: 'no-store' });
+        // 探测 engine 根路径（GET / 恒返回 200 "运行中"），不依赖 NODE_ENV、
+        // 也不需要令牌；比 /_routes 更稳（/_routes 在生产环境被禁返回 404）。
+        const res = await fetch('/engine/', { cache: 'no-store' });
         if (res.ok && alive) setEngineReady(true);
       } catch {
         /* engine 尚未启动 */

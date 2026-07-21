@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     pull_policy: always
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
       - PORT=14570
       - HOST=0.0.0.0
       - DM_LIFE_DATA_DIR=/data

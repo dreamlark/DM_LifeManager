@@ -33,7 +33,7 @@ services:
       - HOST=0.0.0.0
       - DM_LIFE_DATA_DIR=/data
       # P0-2：engine 启用令牌后只接受携带正确令牌的请求（缺省 fail-closed）。
-      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:?请在 .env 中设置 ENGINE_API_TOKEN}
+      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:-}
     volumes:
       - ./data/engine:/data
     expose:
@@ -51,7 +51,7 @@ services:
       # 安全必填：强随机 JWT 签名密钥，缺失则 server 启动即失败。
       - JWT_SECRET=${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
       # 与 engine 的 ENGINE_API_TOKEN 保持一致。
-      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:?请在 .env 中设置 ENGINE_API_TOKEN}
+      - ENGINE_API_TOKEN=${ENGINE_API_TOKEN:-}
     volumes:
       - ./data/server:/data
     expose:
@@ -60,6 +60,7 @@ services:
   frontend:
     image: ghcr.io/dreamlark/dm-life-web:latest
     restart: unless-stopped
+    pull_policy: always
     expose:
       - "80"
 

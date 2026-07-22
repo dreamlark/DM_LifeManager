@@ -2,6 +2,7 @@
   "name": "@dm-life/web",
   "version": "1.0.0",
   "private": true,
+  "deprecated": "功能已 100% 并入 packages/web-collab（统一外壳含个人/协作双模式）。本包不再维护，部署请使用 web-collab 或 All-in-One 镜像（docker-compose.simple.yml）。",
   "type": "module",
   "scripts": {
     "dev": "vite",

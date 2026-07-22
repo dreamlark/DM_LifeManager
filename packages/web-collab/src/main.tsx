@@ -8,6 +8,7 @@ import App from './App';
 import { BackendGate } from './components/BackendGate';
 import './tailwind.css';
 import './styles.css';
+import './styles/theme.css';
 
 // 个人模式（单机版）tRPC 客户端：经 vite /engine 代理转发到 packages/engine（:14570）
 // 包装 fetch 增加 10s 超时：引擎不可达/挂起时让 mutation 快速报错（toast），而非无限 pending 表现为“按键无响应”。

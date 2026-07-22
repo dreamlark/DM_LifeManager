@@ -65,6 +65,18 @@ jobs:
             ghcr.io/dreamlark/dm-life-web:latest
             ghcr.io/dreamlark/dm-life-web:sha-${{ github.sha }}
 
+      # 精简部署：单镜像 All-in-One（含 engine + server + 前端 + caddy，零必填配置）。
+      # 对应 docs/redesign/ 最终方案 P1。
+      - name: Build & push all-in-one
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.allinone
+          push: true
+          tags: |
+            ghcr.io/dreamlark/dm-life:latest
+            ghcr.io/dreamlark/dm-life:sha-${{ github.sha }}
+
       # 注：GHCR 包默认是私有的，且「包可见性」与仓库 public 无关。
       # GITHUB_TOKEN（Actions 机器人）与协作者 PAT 都无法翻转 dreamlark 名下
       # 包的可见性，故此处不自动翻公开，避免“假成功”。

@@ -14,9 +14,9 @@ import { CalendarPage } from './components/CalendarPage';
 import { FamilyFinanceBoard } from './features/finance/FamilyFinanceBoard';
 import { FamilySharedHub } from './features/shared/FamilySharedHub';
 import { ThemeToggle } from './components/ThemeToggle';
+import { AppTopBar } from './components/AppTopBar';
 import { Toaster } from 'sonner';
 import { useUI, applyTheme, applyFontScale } from './store/uiStore';
-import { FloatingIcon } from './components/FloatingIcon';
 import { VersionBanner } from './components/VersionBanner';
 
 type View = 'auth' | 'accept' | 'board';
@@ -226,30 +226,24 @@ export default function App() {
       return (
         <div className="app-shell">
           <VersionBanner />
-          <div className="topbar glass">
-            <div className="topbar-left">
-              <FloatingIcon icon="🏡" tone="emerald" size="sm" />
-              <span className="app-name">家庭协作</span>
-              <button
-                className="btn-ghost sm"
-                type="button"
-                title="返回个人功能（保留协作模式设置）"
-                onClick={() => setFamilyOpen(false)}
-              >
-                个人
-              </button>
-            </div>
-            <div className="topbar-right">
-              {user && <span className="who">@{user.name}</span>}
-              <ThemeToggle />
-              <button className="icon-btn" title="接受邀请 / 加入家庭" onClick={() => setView('accept')} type="button">
-                ✉️
-              </button>
-              <button className="btn-logout" title="锁定 / 退出登录" onClick={logout} type="button">
-                <span aria-hidden="true">⏻</span> 退出
-              </button>
-            </div>
-          </div>
+          <AppTopBar
+            title="家庭协作"
+            brandIcon="🏡"
+            brandTone="emerald"
+            onBack={() => setFamilyOpen(false)}
+            right={
+              <>
+                {user && <span className="dm-who">@{user.name}</span>}
+                <ThemeToggle />
+                <button className="icon-btn" title="接受邀请 / 加入家庭" onClick={() => setView('accept')} type="button">
+                  ✉️
+                </button>
+                <button className="btn-logout" title="锁定 / 退出登录" onClick={logout} type="button">
+                  <span aria-hidden="true">⏻</span> 退出
+                </button>
+              </>
+            }
+          />
           <main className="app-main">
             {currentFamilyId && (
               <div className="seg board-tabs">

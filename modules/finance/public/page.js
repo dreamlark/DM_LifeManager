@@ -11,6 +11,11 @@ const API = '/api/v1/finance';
 const CUR = ['CNY', 'USD', 'EUR', 'JPY', 'GBP'];
 const DEBT_TYPES = ['credit', 'loan', 'mortgage', 'other'];
 const REPAY = ['equal_installment', 'equal_principal', 'interest_only', 'bullet'];
+const INTEREST_TYPES = ['fixed', 'floating'];
+const BENCHMARKS = ['LPR_5Y', 'LPR_1Y', 'PBOC_BASE'];
+const CYCLES = [{ value: 12, label: '每年' }, { value: 6, label: '每半年' }, { value: 3, label: '每季' }];
+const ANCHORS = [{ value: 'anniversary', label: '对年对月对日' }, { value: 'fixed_date', label: '固定日历日' }];
+const REPAY_LABEL = { equal_installment: '等额本息', equal_principal: '等额本金', interest_only: '先息后本', bullet: '到期一次还' };
 const ASSET_CLASSES = ['cash', 'investment', 'property', 'other', 'fixed_asset', 'income_source'];
 const INCOME_TYPES = ['salary', 'bonus', 'investment', 'business', 'other'];
 const INCOME_MODES = ['monthly', 'yearly', 'one_time'];
@@ -82,7 +87,7 @@ export default function render(App) {
       ])));
       content.appendChild(stats);
 
-      const bc = el('div', { class: 'card' }, [el('div', { class: 'card-title' }, [icon('pie', { size: 18 }), el('span', { text: '预算执行 (' + s.month + ')' })]])]);
+      const bc = el('div', { class: 'card' }, [el('div', { class: 'card-title' }, [icon('pie', { size: 18 }), el('span', { text: '预算执行 (' + s.month + ')' })])]);
       if (!s.budgetStatus.length) bc.append(emptyState('还没有设置预算', 'pie'));
       else {
         const list = el('div', { class: 'list' });
@@ -101,6 +106,30 @@ export default function render(App) {
         bc.append(list);
       }
       content.appendChild(bc);
+
+      if (s.debtInsights && s.debtInsights.length) {
+        const ic = el('div', { class: 'card' }, [
+          el('div', { class: 'card-title' }, [
+            icon('trendingUp', { size: 18 }), el('span', { text: '债务资金成本 (IRR/EAR)' }),
+            el('span', { class: 'card-sub', style: { marginLeft: 'auto' }, text: s.debtInsights.length + ' 笔' }),
+          ]),
+        ]);
+        const list = el('div', { class: 'list' });
+        s.debtInsights.forEach((it) => {
+          const ear = it.irr ? (it.irr.ear * 100).toFixed(2) + '%' : '—';
+          const reconLabel = { ahead: '提前/多还', behind: '逾期/漏还', on_track: '账实相符' }[it.reconStatus] || it.reconStatus;
+          const deltaTxt = it.reconDelta != null ? money(it.reconDelta) : '—';
+          list.appendChild(el('div', { class: 'list-item', style: { cursor: 'pointer' }, onclick: () => renderDebtDetail({ id: it.id, creditor: it.creditor, status: 'active' }) }, [
+            el('div', { class: 'li-main' }, [
+              el('div', { class: 'li-title', text: it.creditor }),
+              el('div', { class: 'li-sub', text: 'EAR ' + ear + ' · 勾稽 ' + reconLabel + ' ' + deltaTxt }),
+            ]),
+            el('span', { class: 'badge ' + (it.reconStatus === 'ahead' ? 'badge-success' : it.reconStatus === 'behind' ? 'badge-warning' : 'badge-info'), text: ear }),
+          ]));
+        });
+        ic.append(list);
+        content.appendChild(ic);
+      }
     } catch (e) { content.innerHTML = ''; content.appendChild(emptyState('加载失败：' + e.message, 'alert')); }
   }
 
@@ -129,6 +158,7 @@ export default function render(App) {
             kv('最低月供', d.min_payment != null ? money(d.min_payment) : '—'),
           ]),
           el('div', { class: 'row mt-4' }, [
+            el('button', { class: 'btn btn-sm', onclick: () => renderDebtDetail(d) }, [icon('activity', { size: 15 }), el('span', { text: '详情' })]),
             el('button', { class: 'btn btn-sm', onclick: () => openDebtModal(d) }, [icon('edit', { size: 15 }), el('span', { text: '编辑' })]),
             el('button', { class: 'btn btn-sm', onclick: () => cycleDebtStatus(d) }, [icon('refresh', { size: 15 }), el('span', { text: '状态' })]),
             el('button', { class: 'btn btn-sm btn-danger', onclick: () => delItem('/debts', d.id, d.creditor, renderDebts) }, [icon('trash', { size: 15 })]),
@@ -157,7 +187,13 @@ export default function render(App) {
     const dueDay = input({ type: 'number', placeholder: '还款日 (1-31)', value: d && d.due_day != null ? d.due_day : '' });
     const status = select([{ value: 'active', label: '进行中' }, { value: 'paid', label: '已结清' }, { value: 'frozen', label: '冻结' }], { value: d ? d.status : 'active' });
     const dtype = select(DEBT_TYPES.map((x) => ({ value: x, label: x })), { value: d ? d.debt_type : 'other' });
-    const repay = select(REPAY.map((x) => ({ value: x, label: x })), { value: d ? d.repayment_method : 'equal_installment' });
+    const repay = select(REPAY.map((x) => ({ value: x, label: REPAY_LABEL[x] || x })), { value: d ? d.repayment_method : 'equal_installment' });
+    const iType = select(INTEREST_TYPES.map((x) => ({ value: x, label: x === 'floating' ? '浮动 (LPR联动)' : '固定' })), { value: d ? d.interest_type || 'fixed' : 'fixed' });
+    const termM = input({ type: 'number', placeholder: '期限 (月)', value: d && d.term_months != null ? d.term_months : '' });
+    const firstPay = input({ type: 'date', value: d && d.first_payment_date ? String(d.first_payment_date).slice(0, 10) : '' });
+    const payDay = input({ type: 'number', placeholder: '每月扣款日', value: d && d.payment_day != null ? d.payment_day : '' });
+    const origFee = input({ type: 'number', step: '0.01', placeholder: '放款手续费', value: d && d.origination_fee != null ? d.origination_fee : '' });
+    const balloon = input({ type: 'number', step: '0.01', placeholder: '期末气球贷余额', value: d && d.balloon_amount != null ? d.balloon_amount : '' });
     const startDate = input({ type: 'date', value: d && d.start_date ? d.start_date.slice(0, 10) : '' });
     const note = textarea({ placeholder: '备注（可选）' }); note.value = d ? d.note || '' : '';
     const errB = el('div', { class: 'badge badge-danger', style: { display: 'none' } });
@@ -166,7 +202,10 @@ export default function render(App) {
       el('div', { class: 'grid grid-2' }, [field('本金', principal), field('年利率 %', apr)]),
       el('div', { class: 'grid grid-2' }, [field('最低月供', minP), field('还款日', dueDay)]),
       el('div', { class: 'grid grid-2' }, [field('状态', status), field('类型', dtype)]),
-      el('div', { class: 'grid grid-2' }, [field('还款方式', repay), field('起始日', startDate)]),
+      el('div', { class: 'grid grid-2' }, [field('还款方式', repay), field('利率类型', iType)]),
+      el('div', { class: 'grid grid-2' }, [field('期限 (月)', termM), field('首次还款日', firstPay)]),
+      el('div', { class: 'grid grid-2' }, [field('每月扣款日', payDay), field('起始日', startDate)]),
+      el('div', { class: 'grid grid-2' }, [field('放款手续费', origFee), field('期末气球贷', balloon)]),
       field('备注', note),
     ]);
     const save = el('button', { class: 'btn btn-primary', text: isEdit ? '保存' : '添加' });
@@ -183,6 +222,12 @@ export default function render(App) {
         status: status.value,
         debt_type: dtype.value,
         repayment_method: repay.value,
+        interest_type: iType.value,
+        term_months: termM.value === '' ? null : Number(termM.value),
+        first_payment_date: firstPay.value || null,
+        payment_day: payDay.value === '' ? null : Number(payDay.value),
+        origination_fee: origFee.value === '' ? null : Number(origFee.value),
+        balloon_amount: balloon.value === '' ? null : Number(balloon.value),
         start_date: startDate.value ? startDate.value + 'T00:00:00' : null,
         note: note.value,
       };
@@ -193,6 +238,193 @@ export default function render(App) {
         toast('已保存', 'success'); m.close(); renderDebts();
       } catch (e) { errB.textContent = e.message; errB.style.display = 'inline-flex'; save.disabled = false; }
     };
+  }
+
+  // ---------- Debt detail (finance-v2) ----------
+  async function renderDebtDetail(d) {
+    content.innerHTML = '';
+    const back = el('button', { class: 'btn btn-sm', onclick: () => renderDebts() }, [icon('chevronLeft', { size: 15 }), el('span', { text: '返回' })]);
+    const head = el('div', { class: 'row between mb-4' }, [
+      el('div', { class: 'row' }, [back, el('div', { class: 'card-title', style: { margin: 0 } }, [icon('wallet', { size: 18 }), el('span', { text: d.creditor })])]),
+      el('div', { class: 'row' }, [
+        statusBadge(d.status),
+        el('button', { class: 'btn btn-sm', onclick: () => openDebtModal(d) }, [icon('edit', { size: 15 }), el('span', { text: '编辑' })]),
+        el('button', { class: 'btn btn-sm btn-danger', onclick: () => delItem('/debts', d.id, d.creditor, renderDebts) }, [icon('trash', { size: 15 })]),
+      ]),
+    ]);
+    content.append(head, loadingCenter());
+    try {
+      const [schedRes, sumRes, listRes] = await Promise.all([
+        api.get(API + '/debts/' + d.id + '/schedule'),
+        api.get(API + '/debts/' + d.id + '/summary'),
+        api.get(API + '/debts'),
+      ]);
+      const sched = schedRes.data;
+      const sum = sumRes.data;
+      const fresh = (listRes.data || []).find((x) => x.id === d.id) || d;
+      content.innerHTML = ''; content.appendChild(head);
+
+      // 概要卡
+      const overview = el('div', { class: 'card' }, [el('div', { class: 'card-title' }, [icon('info', { size: 18 }), el('span', { text: '债务概要' })])]);
+      overview.appendChild(el('div', { class: 'grid grid-3', style: { gap: '10px' } }, [
+        kv('本金', money(fresh.principal)),
+        kv('剩余', money(fresh.remaining != null ? fresh.remaining : fresh.principal)),
+        kv('年利率', fresh.apr != null ? fresh.apr + '%' : '—'),
+        kv('利率类型', fresh.interest_type === 'floating' ? '浮动 (LPR联动)' : '固定'),
+        kv('还款方式', REPAY_LABEL[fresh.repayment_method] || fresh.repayment_method),
+        kv('期限', fresh.term_months ? fresh.term_months + ' 月' : '—'),
+      ]));
+      content.appendChild(overview);
+
+      if (!sum.canPlan) {
+        content.appendChild(el('div', { class: 'card' }, [el('div', { class: 'hint', text: '未设置「期限 (月)」，无法生成还款计划 / IRR / 重定价模拟。请在「编辑」中补全期限与起始信息。' })]));
+        return;
+      }
+
+      // 资金成本 + 勾稽
+      const fin = el('div', { class: 'card' }, [el('div', { class: 'card-title' }, [icon('trendingUp', { size: 18 }), el('span', { text: '资金成本与账实勾稽' })])]);
+      if (sum.irr) {
+        fin.appendChild(el('div', { class: 'row', style: { gap: '10px', marginBottom: '12px' } }, [
+          el('div', { class: 'irr-badge' }, [
+            el('span', { text: '实际年化 EAR ' + (sum.irr.ear * 100).toFixed(2) + '%' }),
+            el('span', { class: 'irr-sub', text: '月 IRR ' + (sum.irr.monthly * 100).toFixed(3) + '%' }),
+          ]),
+        ]));
+      } else {
+        fin.appendChild(el('div', { class: 'hint', text: '暂无法计算 IRR（数据不足，可能缺少手续费/期限）。' }));
+      }
+      if (sum.reconciliation) {
+        const r = sum.reconciliation;
+        fin.appendChild(el('div', {}, [
+          el('div', { class: 'recon-row' }, [el('span', { class: 'faint tiny', text: '按计划应已还本金' }), el('span', { text: money(r.paidPrincipal) })]),
+          el('div', { class: 'recon-row' }, [el('span', { class: 'faint tiny', text: '实际已还本金 (按流水笔数)' }), el('span', { text: money(r.actualPaidPrincipal) })]),
+          el('div', { class: 'recon-row' }, [
+            el('span', { class: 'faint tiny', text: '差异' }),
+            el('span', { class: 'recon-delta ' + r.status, text: (r.delta >= 0 ? '+' : '') + money(r.delta) + ' · ' + ({ ahead: '提前/多还', behind: '逾期/漏还', on_track: '账实相符' }[r.status]) }),
+          ]),
+        ]));
+      }
+      content.appendChild(fin);
+
+      // 还款计划表
+      content.appendChild(renderScheduleCard(sched.schedule));
+
+      // 重定价编辑器
+      content.appendChild(renderRepricingEditor(fresh));
+
+      // 提前还款模拟器
+      content.appendChild(renderPrepaymentSim(fresh, sched.schedule));
+    } catch (e) { content.innerHTML = ''; content.appendChild(head); content.appendChild(emptyState('加载失败：' + e.message, 'alert')); }
+  }
+
+  function renderScheduleCard(schedule) {
+    const card = el('div', { class: 'card' }, [el('div', { class: 'card-title' }, [
+      icon('calendar', { size: 18 }), el('span', { text: '还款计划表' }),
+      el('span', { class: 'card-sub', style: { marginLeft: 'auto' }, text: schedule.length + ' 期 · 重定价行高亮' }),
+    ])]);
+    const wrap = el('div', { class: 'table-wrap' });
+    const table = el('table', { class: 'data-table' }, [
+      el('thead', {}, [el('tr', {}, [
+        el('th', { text: '期' }), el('th', { text: '日期' }), el('th', { text: '月供' }),
+        el('th', { text: '本金' }), el('th', { text: '利息' }), el('th', { text: '利率%' }), el('th', { text: '余额' }), el('th', { text: '事件' }),
+      ])]),
+      el('tbody', {}, schedule.map((p) => el('tr', { class: p.repricing ? 'reprice' : '' }, [
+        el('td', { text: String(p.period) }),
+        el('td', { text: p.date || '—' }),
+        el('td', { text: money(p.payment) }),
+        el('td', { text: money(p.principal) }),
+        el('td', { text: money(p.interest) }),
+        el('td', { text: p.rate != null ? Number(p.rate).toFixed(2) : '—' }),
+        el('td', { text: money(p.balance) }),
+        el('td', { class: 'muted', text: p.repricing ? '利率切换' : '' }),
+      ]))),
+    ]);
+    wrap.appendChild(table);
+    card.appendChild(wrap);
+    return card;
+  }
+
+  function renderRepricingEditor(d) {
+    const isFloat = d.interest_type === 'floating';
+    let rule = {};
+    try { rule = d.repricing ? (typeof d.repricing === 'string' ? JSON.parse(d.repricing) : d.repricing) : {}; } catch { rule = {}; }
+    const itype = select(INTEREST_TYPES.map((x) => ({ value: x, label: x === 'floating' ? '浮动 (LPR联动)' : '固定' })), { value: isFloat ? 'floating' : 'fixed' });
+    const bench = select(BENCHMARKS.map((x) => ({ value: x, label: x })), { value: rule.benchmark || 'LPR_5Y' });
+    const spread = input({ type: 'number', step: '0.01', placeholder: '加点 %', value: rule.spread != null ? rule.spread : '' });
+    const cycle = select(CYCLES, { value: String(rule.cycleMonths || 12) });
+    const anchor = select(ANCHORS, { value: rule.anchor || 'anniversary' });
+    const fixedDate = input({ type: 'text', placeholder: 'MM-DD', value: rule.fixedDate || '' });
+    const fixedWrap = field('固定日 (MM-DD)', fixedDate);
+    const floatWrap = el('div', { class: 'grid grid-2', style: { marginTop: '10px' } }, [
+      field('基准利率品种', bench), field('永久加点 %', spread),
+      field('重定价周期', cycle), field('对日方式', anchor),
+      fixedWrap,
+    ]);
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-title' }, [icon('refresh', { size: 18 }), el('span', { text: '利率重定价 (LPR联动)' })]),
+      field('利率类型', itype),
+      floatWrap,
+      el('div', { class: 'row mt-4' }, [el('div', { class: 'grow' }), (() => {
+        const save = el('button', { class: 'btn btn-primary btn-sm', text: '保存重定价规则' });
+        save.onclick = async () => {
+          save.disabled = true;
+          const payload = { interest_type: itype.value };
+          if (itype.value === 'floating') {
+            payload.repricing = {
+              benchmark: bench.value,
+              spread: spread.value === '' ? 0 : Number(spread.value),
+              cycleMonths: Number(cycle.value),
+              anchor: anchor.value,
+              fixedDate: anchor.value === 'fixed_date' ? (fixedDate.value || null) : null,
+            };
+          } else payload.repricing = null;
+          try {
+            await api.post(API + '/debts/' + d.id + '/repricing', payload);
+            toast('重定价规则已保存', 'success');
+            renderDebtDetail(d);
+          } catch (e) { toast(e.message, 'error'); save.disabled = false; }
+        };
+        return save;
+      })()]),
+    ]);
+    const updFloat = () => { floatWrap.style.display = itype.value === 'floating' ? '' : 'none'; };
+    const updFixed = () => { fixedWrap.style.display = anchor.value === 'fixed_date' ? '' : 'none'; };
+    itype.onchange = updFloat; anchor.onchange = updFixed;
+    updFloat(); updFixed();
+    return card;
+  }
+
+  function renderPrepaymentSim(d, schedule) {
+    const amount = input({ type: 'number', step: '0.01', placeholder: '提前还款金额' });
+    const atPeriod = input({ type: 'number', placeholder: '第几期之后 (1-' + schedule.length + ')', value: String(Math.min(12, schedule.length)) });
+    const out = el('div', { class: 'hint', text: '输入金额与期数，实时测算省息与缩期（默认策略：月供不变、缩短期限）。' });
+    const sim = el('button', { class: 'btn btn-sm', text: '模拟' });
+    const rec = el('button', { class: 'btn btn-primary btn-sm', text: '记录提前还款' });
+    rec.disabled = true;
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-title' }, [icon('sparkles', { size: 18 }), el('span', { text: '提前还款模拟器' })]),
+      el('div', { class: 'grid grid-2', style: { gap: '10px' } }, [field('提前还款金额', amount), field('第几期之后', atPeriod)]),
+      el('div', { class: 'row mt-4', style: { gap: '8px' } }, [sim, rec]),
+      out,
+    ]);
+    sim.onclick = async () => {
+      if (!amount.value || Number(amount.value) <= 0) { out.textContent = '请输入有效金额'; out.className = 'hint'; return; }
+      try {
+        const b = (await api.get(API + '/debts/' + d.id + '/extra-payments/benefit?amount=' + encodeURIComponent(amount.value) + '&atPeriod=' + encodeURIComponent(atPeriod.value || schedule.length))).data;
+        out.className = 'hint';
+        out.textContent = '预计省息 ' + money(b.interestSaved) + '，缩短期限 ' + b.termShortenedMonths + ' 个月。';
+        rec.disabled = false;
+      } catch (e) { out.textContent = e.message; out.className = 'hint'; }
+    };
+    rec.onclick = async () => {
+      rec.disabled = true;
+      try {
+        await api.post(API + '/debts/' + d.id + '/extra-payments', { amount: Number(amount.value), atPeriod: Number(atPeriod.value || schedule.length) });
+        toast('已记录提前还款', 'success');
+        renderDebtDetail(d);
+      } catch (e) { toast(e.message, 'error'); rec.disabled = false; }
+    };
+    return card;
   }
 
   // ---------- Incomes ----------

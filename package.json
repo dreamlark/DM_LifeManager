@@ -11,7 +11,7 @@
     "start": "node --import dotenv/config server/index.js",
     "dev": "node --import dotenv/config --watch server/index.js",
     "setup": "node --import dotenv/config setup.js",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs && node --test test/finance-v2.test.mjs"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

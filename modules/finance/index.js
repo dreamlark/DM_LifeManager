@@ -12,6 +12,16 @@
 import express from 'express';
 import crypto from 'node:crypto';
 import { createLogger } from '../../server/logger.js';
+import {
+  LPR_HISTORY,
+  amortize,
+  generateRepricingAdjustments,
+  computeIRR,
+  debtProgressSummary,
+  prepaymentBenefit,
+  buildCashflows,
+  addMonths,
+} from './debt-engine.js';
 
 const log = createLogger('Finance');
 
@@ -98,10 +108,68 @@ export default {
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
       );
 
+      -- finance-v2: LPR / 基准利率历史（种子：2022–2026）
+      CREATE TABLE IF NOT EXISTS lpr_history (
+        benchmark      TEXT NOT NULL,
+        rate           REAL NOT NULL,
+        effective_date TEXT NOT NULL
+      );
+
+      -- finance-v2: 浮动利率重定价事件（由规则派生后落库，便于审计）
+      CREATE TABLE IF NOT EXISTS debt_repricing_events (
+        id            TEXT PRIMARY KEY,
+        debt_id       TEXT NOT NULL,
+        effective_date TEXT NOT NULL,
+        old_rate      REAL,
+        new_rate      REAL,
+        basis         TEXT,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      );
+
+      -- finance-v2: 提前还款记录（含量化回写）
+      CREATE TABLE IF NOT EXISTS debt_extra_payments (
+        id             TEXT PRIMARY KEY,
+        debt_id        TEXT NOT NULL,
+        amount         REAL NOT NULL,
+        at_period      INTEGER,
+        interest_saved REAL,
+        term_shortened INTEGER,
+        applied_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      );
+
       CREATE INDEX IF NOT EXISTS idx_txn_at ON transactions(occurred_at);
       CREATE INDEX IF NOT EXISTS idx_txn_kind ON transactions(kind);
       CREATE INDEX IF NOT EXISTS idx_debt_status ON debts(status);
+      CREATE INDEX IF NOT EXISTS idx_reprice_debt ON debt_repricing_events(debt_id);
+      CREATE INDEX IF NOT EXISTS idx_extrapay_debt ON debt_extra_payments(debt_id);
     `);
+
+    // finance-v2: 增量列（幂等追加，旧行默认 fixed/NULL，已存在则跳过）
+    const addCols = [
+      ['interest_type', "TEXT NOT NULL DEFAULT 'fixed'"],
+      ['repricing', 'TEXT'],
+      ['first_payment_date', 'TEXT'],
+      ['payment_day', 'INTEGER'],
+      ['origination_fee', 'REAL'],
+      ['balloon_amount', 'REAL'],
+      ['rate_adjustments', 'TEXT'],
+    ];
+    const existing = new Set(
+      db.prepare("PRAGMA table_info(debts)").all().map((c) => c.name),
+    );
+    for (const [col, def] of addCols) {
+      if (!existing.has(col)) db.exec(`ALTER TABLE debts ADD COLUMN ${col} ${def}`);
+    }
+
+    // 种子 LPR 历史（仅首次为空时写入）
+    const lprCount = db.prepare('SELECT COUNT(*) AS c FROM lpr_history').get().c;
+    if (lprCount === 0) {
+      const ins = db.prepare('INSERT INTO lpr_history (benchmark, rate, effective_date) VALUES (?,?,?)');
+      const seed = db.transaction(() => {
+        for (const row of LPR_HISTORY) ins.run(row.benchmark, row.rate, row.effective_date);
+      });
+      seed();
+    }
   },
 
   routes(ctx) {
@@ -129,14 +197,20 @@ export default {
         const principal = Number(req.body?.principal);
         if (!Number.isFinite(principal) || principal < 0) return res.status(400).json({ error: 'Invalid principal.', code: 400 });
         const id = uid();
+        const interestType = req.body?.interest_type === 'floating' ? 'floating' : 'fixed';
         db.prepare(`INSERT INTO debts (id, creditor, principal, apr, min_payment, due_day, status,
-          debt_type, term_months, repayment_method, start_date, note, created_at, updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          debt_type, term_months, repayment_method, start_date, note, created_at, updated_at,
+          interest_type, repricing, first_payment_date, payment_day, origination_fee, balloon_amount, rate_adjustments)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           id, creditor, principal, numOrNull(req.body?.apr), numOrNull(req.body?.min_payment),
           intOrNull(req.body?.due_day), DEBT_STATUS.includes(req.body?.status) ? req.body.status : 'active',
           req.body?.debt_type || 'other', intOrNull(req.body?.term_months),
           req.body?.repayment_method || 'equal_installment', req.body?.start_date || null,
           req.body?.note || '', nowISO(), nowISO(),
+          interestType, jsonField(req.body?.repricing),
+          req.body?.first_payment_date || null, intOrNull(req.body?.payment_day),
+          numOrNull(req.body?.origination_fee), numOrNull(req.body?.balloon_amount),
+          jsonField(req.body?.rate_adjustments),
         );
         res.status(201).json({ data: db.prepare('SELECT * FROM debts WHERE id=?').get(id) });
       } catch (e) { res.status(500).json({ error: e.message }); }
@@ -146,15 +220,22 @@ export default {
       try {
         const d = db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id);
         if (!d) return res.status(404).json({ error: 'Debt not found.', code: 404 });
+        const interestType = req.body?.interest_type === 'floating' ? 'floating' : (req.body?.interest_type ?? d.interest_type);
         db.prepare(`UPDATE debts SET creditor=?, principal=?, apr=?, min_payment=?, due_day=?, status=?,
-          debt_type=?, term_months=?, repayment_method=?, start_date=?, note=?, updated_at=?
+          debt_type=?, term_months=?, repayment_method=?, start_date=?, note=?, updated_at=?,
+          interest_type=?, repricing=?, first_payment_date=?, payment_day=?, origination_fee=?, balloon_amount=?, rate_adjustments=?
           WHERE id=?`).run(
           String(req.body?.creditor ?? d.creditor).trim(), numOr(req.body?.principal, d.principal),
           numOrNull(req.body?.apr ?? d.apr), numOrNull(req.body?.min_payment ?? d.min_payment),
           intOrNull(req.body?.due_day ?? d.due_day), DEBT_STATUS.includes(req.body?.status) ? req.body.status : d.status,
           req.body?.debt_type ?? d.debt_type, intOrNull(req.body?.term_months ?? d.term_months),
           req.body?.repayment_method ?? d.repayment_method, req.body?.start_date ?? d.start_date,
-          req.body?.note ?? d.note, nowISO(), req.params.id,
+          req.body?.note ?? d.note, nowISO(),
+          interestType, jsonField(req.body?.repricing ?? d.repricing),
+          req.body?.first_payment_date ?? d.first_payment_date, intOrNull(req.body?.payment_day ?? d.payment_day),
+          numOrNull(req.body?.origination_fee ?? d.origination_fee), numOrNull(req.body?.balloon_amount ?? d.balloon_amount),
+          jsonField(req.body?.rate_adjustments ?? d.rate_adjustments),
+          req.params.id,
         );
         res.json({ data: db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id) });
       } catch (e) { res.status(500).json({ error: e.message }); }
@@ -173,6 +254,107 @@ export default {
       const r = db.prepare('DELETE FROM debts WHERE id=?').run(req.params.id);
       if (r.changes === 0) return res.status(404).json({ error: 'Debt not found.', code: 404 });
       res.json({ ok: true });
+    });
+
+    // ---------- Debt planning (finance-v2) ----------
+    // 还款计划（含重定价生效点标记）
+    router.get('/debts/:id/schedule', (req, res) => {
+      try {
+        const d = db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id);
+        if (!d) return res.status(404).json({ error: 'Debt not found.', code: 404 });
+        const schedule = amortize(d, { lprHistory: LPR_HISTORY });
+        const canPlan = schedule.length > 0;
+        const events = d.interest_type === 'floating' && d.start_date
+          ? generateRepricingAdjustments(parseRepricing(d.repricing), d.first_payment_date || addMonths(d.start_date, 1), d.term_months || 0, LPR_HISTORY)
+          : [];
+        res.json({ data: { debt: d, schedule, canPlan, repricingEvents: events } });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // IRR/EAR + 勾稽 + 已记录提前还款
+    router.get('/debts/:id/summary', (req, res) => {
+      try {
+        const d = db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id);
+        if (!d) return res.status(404).json({ error: 'Debt not found.', code: 404 });
+        const canPlan = Number(d.term_months) > 0 && Number(d.principal) > 0;
+        let irr = null;
+        let reconciliation = null;
+        let schedule = null;
+        if (canPlan) {
+          schedule = amortize(d, { lprHistory: LPR_HISTORY });
+          const flows = buildCashflows(d, { lprHistory: LPR_HISTORY });
+          irr = flows ? computeIRR(flows) : null;
+          const pays = db.prepare("SELECT amount, occurred_at FROM transactions WHERE kind='debt_payment' AND debt_id=? ORDER BY occurred_at").all(d.id);
+          reconciliation = debtProgressSummary(d, pays, { lprHistory: LPR_HISTORY });
+        }
+        const extraPayments = db.prepare('SELECT * FROM debt_extra_payments WHERE debt_id=? ORDER BY applied_at').all(d.id);
+        res.json({ data: { canPlan, irr, reconciliation, extraPayments, schedule } });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // 设置浮动利率规则（清空则转固定）
+    router.post('/debts/:id/repricing', (req, res) => {
+      try {
+        const d = db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id);
+        if (!d) return res.status(404).json({ error: 'Debt not found.', code: 404 });
+        const itype = req.body?.interest_type === 'floating' ? 'floating' : 'fixed';
+        let repricing = null;
+        if (itype === 'floating') {
+          const r = req.body?.repricing;
+          if (!r || !r.benchmark) return res.status(400).json({ error: 'Floating rate requires repricing rule with benchmark.', code: 400 });
+          repricing = JSON.stringify({
+            benchmark: r.benchmark,
+            spread: Number(r.spread) || 0,
+            cycleMonths: Number(r.cycleMonths) || 12,
+            anchor: r.anchor === 'fixed_date' ? 'fixed_date' : 'anniversary',
+            fixedDate: r.anchor === 'fixed_date' ? (r.fixedDate || null) : null,
+          });
+        }
+        db.prepare('UPDATE debts SET interest_type=?, repricing=?, updated_at=? WHERE id=?').run(itype, repricing, nowISO(), d.id);
+        // 重定价事件落库（清空旧 → 写新）
+        db.prepare('DELETE FROM debt_repricing_events WHERE debt_id=?').run(d.id);
+        let events = [];
+        if (itype === 'floating' && d.start_date) {
+          const base = d.first_payment_date || addMonths(d.start_date, 1);
+          const evs = generateRepricingAdjustments(JSON.parse(repricing), base, d.term_months || 0, LPR_HISTORY);
+          const ins = db.prepare('INSERT INTO debt_repricing_events (id, debt_id, effective_date, old_rate, new_rate, basis) VALUES (?,?,?,?,?,?)');
+          const tx = db.transaction(() => { for (const e of evs) ins.run(uid(), d.id, e.effectiveDate, null, e.rate, e.basis); });
+          tx();
+          events = evs;
+        }
+        res.json({ data: { ...db.prepare('SELECT * FROM debts WHERE id=?').get(d.id), repricingEvents: events } });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // 模拟提前还款收益（不落库）
+    router.get('/debts/:id/extra-payments/benefit', (req, res) => {
+      try {
+        const d = db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id);
+        if (!d) return res.status(404).json({ error: 'Debt not found.', code: 404 });
+        const amount = Number(req.query.amount);
+        if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Invalid amount.', code: 400 });
+        const atPeriod = intOrNull(req.query.atPeriod) || Number(d.term_months) || 1;
+        const benefit = prepaymentBenefit(d, amount, atPeriod, { lprHistory: LPR_HISTORY });
+        res.json({ data: benefit });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // 记录提前还款，回写 interest_saved / term_shortened
+    router.post('/debts/:id/extra-payments', (req, res) => {
+      try {
+        const d = db.prepare('SELECT * FROM debts WHERE id=?').get(req.params.id);
+        if (!d) return res.status(404).json({ error: 'Debt not found.', code: 404 });
+        const amount = Number(req.body?.amount);
+        if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Invalid amount.', code: 400 });
+        const atPeriod = intOrNull(req.body?.atPeriod) || Number(d.term_months) || 1;
+        const benefit = prepaymentBenefit(d, amount, atPeriod, { lprHistory: LPR_HISTORY });
+        const id = uid();
+        db.prepare(`INSERT INTO debt_extra_payments (id, debt_id, amount, at_period, interest_saved, term_shortened, applied_at)
+          VALUES (?,?,?,?,?,?,?)`).run(
+          id, d.id, amount, atPeriod, benefit.interestSaved, benefit.termShortenedMonths, nowISO(),
+        );
+        res.status(201).json({ data: { id, benefit, record: db.prepare('SELECT * FROM debt_extra_payments WHERE id=?').get(id) } });
+      } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // ---------- Incomes ----------
@@ -348,6 +530,16 @@ export default {
         const minMonthly = debtRows.filter((d) => d.status === 'active')
           .reduce((s, d) => s + (d.min_payment || 0), 0);
 
+        // finance-v2: 活跃且有期限的债务，披露 IRR/EAR + 勾稽状态
+        const insightRows = db.prepare("SELECT * FROM debts WHERE status='active' AND term_months IS NOT NULL AND term_months > 0").all();
+        const debtInsights = insightRows.map((d) => {
+          const flows = buildCashflows(d, { lprHistory: LPR_HISTORY });
+          const irr = flows ? computeIRR(flows) : null;
+          const pays = db.prepare("SELECT amount, occurred_at FROM transactions WHERE kind='debt_payment' AND debt_id=? ORDER BY occurred_at").all(d.id);
+          const recon = debtProgressSummary(d, pays, { lprHistory: LPR_HISTORY });
+          return { id: d.id, creditor: d.creditor, irr, reconStatus: recon.status, reconDelta: recon.delta };
+        });
+
         const incomeRows = db.prepare('SELECT amount, recurring, monthly_avg FROM incomes').all();
         const monthlyIncome = incomeRows.reduce((s, r) => {
           if (r.recurring) return s + (r.monthly_avg ?? r.amount);
@@ -379,6 +571,7 @@ export default {
             monthlyExpense: expenseMonth,
             monthlyNet: monthlyIncome - expenseMonth,
             budgetStatus,
+            debtInsights,
           },
         });
       } catch (e) { res.status(500).json({ error: e.message }); }
@@ -391,3 +584,18 @@ export default {
 function numOr(v, fallback) { return Number.isFinite(Number(v)) ? Number(v) : fallback; }
 function numOrNull(v) { return v === undefined || v === null || v === '' ? null : Number(v); }
 function intOrNull(v) { return v === undefined || v === null || v === '' ? null : parseInt(v, 10); }
+
+/** 将 repricing / rate_adjustments 规整为 JSON 字符串或 NULL（对象→string，非法→NULL）。 */
+function jsonField(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') {
+    try { JSON.parse(v); return v; } catch { return JSON.stringify(v); }
+  }
+  try { return JSON.stringify(v); } catch { return null; }
+}
+/** 解析 repricing 字段（JSON 字符串或对象）为对象，失败返回空对象。 */
+function parseRepricing(v) {
+  if (!v) return {};
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(v); } catch { return {}; }
+}

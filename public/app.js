@@ -1,7 +1,7 @@
 /**
  * app.js — SPA entry point.
  * Boots the router once the DOM is ready. Stays tiny on purpose: all app
- * logic lives in router.js / ui.js / api.js / modules/*/page.js.
+ * logic lives in router.js / ui.js / api.js / modules/<name>/page.js.
  */
 import { initRouter } from '/router.js';
 

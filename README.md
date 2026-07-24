@@ -1,3 +1,8 @@
+> **分支说明**：当前 `refactor/yuvomi-architecture` 分支已将本系统彻底重写为
+> **单容器 / 零构建 / 单用户** 的 Yuvomi 风格实现（Express 5 + better-sqlite3 + 原生 JS PWA）。
+> 下文描述的是旧版 TypeScript 架构；新版架构、模块契约与部署见
+> [`docs/refactor-yuvomi/README.md`](docs/refactor-yuvomi/README.md)。
+
 # DM_life — 人生管理系统（TypeScript 实现 · 单机 + 家庭协作）
 
 一套自托管的人生管理系统：任务 / 四象限 / 时间块 / 财务 / 提醒 / 灵感 / 家庭共享。

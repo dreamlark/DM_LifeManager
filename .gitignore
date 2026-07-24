@@ -28,6 +28,10 @@ packages/engine/data/
 .preview-data*
 .smoke-*
 data/
+.data/
+.data*/
+.cookies
+.cookies*
 
 # ===== 临时与调试产物 =====
 .workbuddy/

@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node --import dotenv/config server/index.js",
     "dev": "node --import dotenv/config --watch server/index.js",
-    "setup": "node --import dotenv/config setup.js"
+    "setup": "node --import dotenv/config setup.js",
+    "test": "node test/smoke.mjs"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
